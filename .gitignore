@@ -8,6 +8,7 @@ wandb
 logs/
 .pyc
 .venv
+.ipynb_checkpoints/
 
 data/
 value_head_probes/
