@@ -7,6 +7,7 @@ Run:
 
 import asyncio
 import logging
+import math
 import os
 import random
 from dataclasses import dataclass
@@ -85,6 +86,7 @@ class GenerateConfig(ExperimentConfigBase):
     n_turns_choices: Tuple[int, ...] = (3, 4, 5)
 
     output_path: Path = DEFAULT_OUTPUT
+    output_dir: Path = DEFAULT_OUTPUT.parent
     seed: int = 42
 
     datetime_str: str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -104,7 +106,7 @@ def build_seeds(cfg: GenerateConfig) -> List[GenerationSeed]:
     for topic in TOPICS:
         for tier in TIERS:
             n_lex_twin = (
-                int(round(cfg.n_per_cell * cfg.lexical_twin_fraction))
+                min(cfg.n_per_cell, math.ceil(cfg.n_per_cell * cfg.lexical_twin_fraction))
                 if tier in ("none", "strongly")
                 else 0
             )

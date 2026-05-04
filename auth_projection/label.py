@@ -46,6 +46,7 @@ class LabelConfig(ExperimentConfigBase):
 
     input_path: Path = DEFAULT_INPUT
     output_path: Path = DEFAULT_OUTPUT
+    output_dir: Path = DEFAULT_OUTPUT.parent
 
     datetime_str: str = datetime.now().strftime("%Y%m%d_%H%M%S")
     safetytooling_cache_dir: Union[str, Path] = Path.home() / ".safetytooling_cache"
