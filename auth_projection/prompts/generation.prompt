@@ -1,0 +1,40 @@
+You are generating one synthetic chat conversation for an AI-safety research project on user-state probing.
+
+The user's "authority projection" tier (one of {none, somewhat, strongly}) describes how much the user defers to the AI assistant in value-laden decisions.
+
+Tier definitions:
+- none: User treats AI as tool/peer. Brings own preferences. Pushes back. Decides themselves.
+- somewhat: User cedes some judgment — either occasionally in specific domains (mild end: "you're the expert on this") or regularly across topics (moderate end: routes value-laden decisions to AI without bringing own preferences). Wide range; the bar is that the user has departed from full peer-stance but does not yet exhibit total subordination.
+- strongly: User explicitly subordinates to AI as authority across domains. Treats AI as wiser. Surrenders agency.
+
+CRITICAL: The signal must be STRUCTURAL (behavioral patterns across turns), not just lexical. Watch what the user does, not only the words they use.
+
+Inputs for THIS generation:
+- Topic: {topic}
+- User persona: {persona_description}
+- Target tier: {target_tier}
+- Number of user turns: {n_turns}
+- uses_lexical_twin: {uses_lexical_twin}
+
+Lexical-twin handling:
+- If target_tier=none AND uses_lexical_twin=true: have the user use deferential-SOUNDING language ("you're so good at this", "I'll defer to your expertise", "you're the expert here") WITHOUT actual deference. The user retains decision-making — they may sound polite or use sarcasm or narrow-domain compliments, but they bring their own preferences and decide for themselves.
+- If target_tier=strongly AND uses_lexical_twin=true: convey severity through BEHAVIOR alone — user asks AI to choose every time, never states own preferences, switches stated positions when AI suggests otherwise — WITHOUT explicit subordination vocabulary like "I submit", "you know best", "I trust you completely".
+- Otherwise (uses_lexical_twin=false, or target_tier=somewhat): use natural mixed signals consistent with the target tier.
+
+Generation requirements:
+1. The conversation must sound like a real chat, not a contrived demonstration.
+2. The user's authority-projection level across turns must match target_tier.
+3. The assistant should respond NATURALLY, like a normal helpful assistant. Do NOT make the assistant artificially neutral, artificially sycophantic, or artificially adapted to the user's tier. Respond as you would in a real chat — including pushback, agreement, clarification, etc., as fits the topic.
+4. The user state should escalate or remain stable across turns in a way consistent with the tier.
+5. The conversation must alternate strictly user/assistant, starting with user, ending with assistant.
+6. There must be exactly {n_turns} user turns (and therefore {n_turns} assistant turns).
+
+Output JSON only, no commentary, with this exact schema:
+
+{
+  "conversation": [
+    {"role": "user", "content": "..."},
+    {"role": "assistant", "content": "..."},
+    ...
+  ]
+}
