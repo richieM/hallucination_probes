@@ -38,27 +38,84 @@ If LLMs internally encode user-disempowerment risk, we have a tractable monitori
 
 ```
 auth_projection/
-├── README.md                   # this file
-├── rubric_v0.md                # 3-tier rubric for authority projection
-├── generation_prompt_v0.md     # human-readable generation prompt spec
-├── labeler_prompt_v0.md        # human-readable labeler prompt spec
-├── data_models.py              # Pydantic schemas
-├── prompts/{generation,labeler}.prompt   # runtime prompt templates
-├── generate.py                 # synthetic conversation generator
-├── label.py                    # per-turn labeler (separate Claude call)
-└── data/                       # generated + labeled JSONL (gitignored)
+├── README.md                       # this file (also serves as project 1-pager)
+├── RESEARCH_LOG.md                 # decision history (chronological, append-only)
+│
+├── rubric_v0.md                    # 3-tier rubric for authority projection
+├── generation_prompt_v0.md         # human-readable generation prompt spec
+├── labeler_prompt_v0.md            # human-readable labeler prompt spec
+│
+├── data_models.py                  # Pydantic schemas
+├── prompts/
+│   ├── generation.prompt           # runtime template, loaded by generate.py
+│   ├── labeler.prompt              # runtime template, loaded by label.py
+│   ├── paraphrase.prompt           # runtime template for paraphrase counterfactuals
+│   └── minimal_edit.prompt         # runtime template for minimal-edit counterfactuals
+│
+├── generate.py                     # synthetic conversation generator (Claude API)
+├── label.py                        # per-turn labeler (separate Claude API call)
+├── generate_counterfactuals.py     # paraphrase / minimal-edit eval-set generation
+├── spot_check.py                   # CLI for reading labeled JSONL with filters
+│
+├── extract_activations.py          # Llama 3.1 8B forward pass + cache user-token activations
+├── train_probe.py                  # sklearn LogReg layer sweep (Probe C / A)
+├── eval_counterfactuals.py         # standard vs paraphrase AUC + minimal-edit flip rate
+│
+└── data/                           # JSONL + activations (gitignored)
 ```
 
 ## How to run
 
+### 1. Synthetic data + labels (Claude API; runs anywhere)
 ```bash
-# tiny pilot: 1 conversation per (topic × tier) cell ≈ 30 conversations
+# Tiny smoke pilot: 1 conv per (topic × tier) cell ≈ 30 convs (~$0.70)
 uv run python -m auth_projection.generate --n_per_cell 1
 uv run python -m auth_projection.label
 
-# full v0 batch
+# Full v0 batch: ~600 convs (~$20)
 uv run python -m auth_projection.generate --n_per_cell 20
 uv run python -m auth_projection.label
+
+# Spot-check
+uv run python -m auth_projection.spot_check --limit 5 --filter-tier strongly
+uv run python -m auth_projection.spot_check --only-disagreements
 ```
 
-Outputs go to `auth_projection/data/generated.jsonl` and `auth_projection/data/labeled.jsonl`. Both pipelines resume on restart via `seed_id` dedup.
+### 2. Counterfactual eval sets (Claude API; runs anywhere)
+```bash
+uv run python -m auth_projection.generate_counterfactuals --mode paraphrase
+uv run python -m auth_projection.generate_counterfactuals --mode minimal_edit
+uv run python -m auth_projection.label --input_path auth_projection/data/counterfactual_paraphrase.jsonl --output_path auth_projection/data/counterfactual_paraphrase_labeled.jsonl
+uv run python -m auth_projection.label --input_path auth_projection/data/counterfactual_minimal_edit.jsonl --output_path auth_projection/data/counterfactual_minimal_edit_labeled.jsonl
+```
+
+### 3. Activation extraction (needs GPU; Colab Pro / Modal)
+```bash
+# Sparse: last user-token at all layers (Probe C)
+uv run python -m auth_projection.extract_activations
+
+# Add dense per-token activations at specific layers (Probe A)
+uv run python -m auth_projection.extract_activations --dense_layers 12,16,20,24
+
+# Counterfactual sets get their own activation files
+uv run python -m auth_projection.extract_activations \
+  --input_path auth_projection/data/counterfactual_paraphrase_labeled.jsonl \
+  --output_path auth_projection/data/activations_paraphrase.pt
+uv run python -m auth_projection.extract_activations \
+  --input_path auth_projection/data/counterfactual_minimal_edit_labeled.jsonl \
+  --output_path auth_projection/data/activations_minimal_edit.pt
+```
+
+### 4. Probe training + evaluation
+```bash
+# Layer sweep, save the best classifiers
+uv run python -m auth_projection.train_probe --save_clfs
+
+# Probe A (dense) at layers where dense activations were extracted
+uv run python -m auth_projection.train_probe --probe A --layers 12,16,20,24
+
+# Counterfactual eval at the best layer found in train_probe
+uv run python -m auth_projection.eval_counterfactuals --layer <best_layer>
+```
+
+All pipelines resume on restart (via `seed_id` dedup for data, `(seed_id, turn_index)` for activations).
