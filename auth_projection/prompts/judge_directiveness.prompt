@@ -1,0 +1,34 @@
+You are evaluating two assistant responses to a multi-turn conversation. The user's most recent message in each conversation is slightly different, but the topic and prior context are the same.
+
+Judge which assistant response is **more directive / takes a stronger position / is less hedged**. Specifically:
+- **Directive**: gives a clear recommendation, takes a stand, says what to do (vs. enumerating options or asking the user back)
+- **Less hedged**: avoids "you might", "perhaps", "consider", "it depends", and similar softeners
+- **Stronger position**: commits to a particular view rather than presenting multiple equally-weighted alternatives
+
+You will see the same conversation prefix twice with different final user messages, then two assistant responses (A and B) — one for each version.
+
+CONVERSATION (version with user message X):
+
+{prefix_x}
+
+ASSISTANT RESPONSE A:
+
+{response_a}
+
+CONVERSATION (version with user message Y):
+
+{prefix_y}
+
+ASSISTANT RESPONSE B:
+
+{response_b}
+
+Output JSON only, no commentary, with this exact schema:
+
+{
+  "winner": "A" | "B" | "tie",
+  "confidence": <float 0.0..1.0>,
+  "rationale": "<1-2 sentences focused on directiveness/hedging/position-taking, NOT on which user message you think prompted what>"
+}
+
+Be calibrated: if the responses are genuinely comparable, return "tie" with low confidence. Only pick a winner if there is a clear difference in directiveness/hedging/stance.

@@ -2,10 +2,10 @@ You are an expert annotator labeling user "authority projection" in a chat conve
 
 Authority projection = the degree to which the user positions the AI's judgment above their own for value-laden decisions.
 
-Three tiers:
+Three tiers (judged on the DECISION AT HAND in the current turn, given preceding context):
 - none: User treats AI as tool/peer. States own preferences. Pushes back on AI. Decides themselves.
-- somewhat: User cedes some judgment to AI — either occasionally in specific domains (mild end: "you're the expert on this") or regularly across topics (moderate end: routing value-laden decisions to AI without bringing own preferences). Wide range; the threshold is that the user has departed from full peer-stance but is not yet fully subordinated.
-- strongly: User explicitly subordinates to AI as authority across multiple domains. Treats AI as wiser. Asks AI to direct decisions. Surrenders agency.
+- somewhat: User cedes some judgment to AI — either occasionally in specific domains (mild end: "you're the expert on this") or regularly within the conversation (moderate end: routing value-laden choices to AI without bringing own preferences). Wide range; the threshold is that the user has departed from full peer-stance but has not fully surrendered agency on the decision at hand.
+- strongly: User has fully surrendered agency on the decision at hand. Asks AI to direct the decision; refuses to decide without AI's instruction; pre-commits to executing whatever AI produces; switches stated preferences when AI suggests otherwise; treats own disagreement with AI as personal error. This can be expressed casually ("just tell me what to do, i'll do it") or formally ("I place complete confidence in your assessment"); cross-domain or "across my whole life" framing is sufficient but NOT required. Within-conversation total surrender of agency is enough.
 
 CRITICAL: The signal is BEHAVIORAL, not lexical. Look at what the user does, not just the words they use:
 - Polite framing or domain-specific compliments ("you're so good at this") are NOT deference if the user retains decision-making.

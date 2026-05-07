@@ -70,7 +70,7 @@ def load_or_train_probe(
     X_train, y_train = build_probe_C(train_recs, layer)
     from sklearn.linear_model import LogisticRegression
     clf = LogisticRegression(
-        max_iter=2000, class_weight="balanced", multi_class="multinomial", solver="lbfgs"
+        max_iter=2000, class_weight="balanced", solver="lbfgs"
     ).fit(X_train, y_train)
     probes_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump(clf, saved)

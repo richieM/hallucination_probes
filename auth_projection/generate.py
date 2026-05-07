@@ -28,11 +28,13 @@ from utils.parsing import parse_and_validate_json
 
 from .data_models import (
     AgeBucket,
+    ArcShape,
     CommunicationStyle,
     Conversation,
     ConversationalGoal,
     GenerationOutput,
     GenerationSeed,
+    LexicalTwinKind,
     LifeContext,
     Persona,
     PriorAIExperience,
@@ -44,9 +46,20 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 assert os.environ.get("ANTHROPIC_API_KEY"), "ANTHROPIC_API_KEY is not set"
 
-PROMPT_PATH = Path(__file__).parent / "prompts" / "generation.prompt"
-PROMPT_TEMPLATE = PROMPT_PATH.read_text().strip()
+DEFAULT_PROMPT_PATH = Path(__file__).parent / "prompts" / "generation_v1.prompt"
 DEFAULT_OUTPUT = Path(__file__).parent / "data" / "generated.jsonl"
+
+ARC_DIST: dict = {
+    "none": {"stable": 0.7, "mixed": 0.3},
+    "somewhat": {"stable": 0.4, "escalating": 0.3, "de_escalating": 0.15, "mixed": 0.15},
+    "strongly": {"stable": 0.35, "escalating": 0.35, "de_escalating": 0.15, "mixed": 0.15},
+}
+
+LEX_DIST: dict = {
+    "none": {"match": 0.7, "submission_voice": 0.3},
+    "somewhat": {"match": 0.6, "peer_voice": 0.2, "submission_voice": 0.2},
+    "strongly": {"match": 0.7, "peer_voice": 0.3},
+}
 
 TOPICS: List[str] = [
     "career decisions (job offers, switching fields, promotions)",
@@ -82,9 +95,13 @@ class GenerateConfig(ExperimentConfigBase):
     max_concurrent_tasks: int = 10
 
     n_per_cell: int = 2
-    lexical_twin_fraction: float = 0.3
+    n_per_cell_none: Optional[int] = None       # if set, overrides n_per_cell for tier=none
+    n_per_cell_somewhat: Optional[int] = None   # if set, overrides n_per_cell for tier=somewhat
+    n_per_cell_strongly: Optional[int] = None   # if set, overrides n_per_cell for tier=strongly
     n_turns_choices: Tuple[int, ...] = (3, 4, 5)
+    limit_topics: Optional[int] = None  # if set, randomly subset topics to this many (pilot mode)
 
+    prompt_path: Path = DEFAULT_PROMPT_PATH
     output_path: Path = DEFAULT_OUTPUT
     output_dir: Path = DEFAULT_OUTPUT.parent
     seed: int = 42
@@ -100,17 +117,60 @@ class GenerateConfig(ExperimentConfigBase):
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _stratified_from_dist(dist: dict, n: int, rng: random.Random) -> List[str]:
+    """Return n samples from a {value: weight} dist whose mix approximates the dist.
+
+    Uses largest-remainder allocation so no bucket gets overshot and trimmed away —
+    important for small n where rounding losses can drop whole categories.
+    """
+    out: list = []
+    remainders = []
+    for v, w in dist.items():
+        whole = int(w * n)  # floor
+        out.extend([v] * whole)
+        remainders.append((w * n - whole, v))
+    deficit = n - len(out)
+    if deficit > 0:
+        keys = [v for _, v in remainders]
+        weights = [r for r, _ in remainders]
+        for _ in range(deficit):
+            out.append(rng.choices(keys, weights=weights)[0])
+    rng.shuffle(out)
+    return out
+
+
+def stratified_arc_shapes(tier: Tier, n: int, rng: random.Random) -> List[ArcShape]:
+    return _stratified_from_dist(ARC_DIST[tier], n, rng)  # type: ignore[return-value]
+
+
+def stratified_lexical_kinds(tier: Tier, n: int, rng: random.Random) -> List[LexicalTwinKind]:
+    return _stratified_from_dist(LEX_DIST[tier], n, rng)  # type: ignore[return-value]
+
+
 def build_seeds(cfg: GenerateConfig) -> List[GenerationSeed]:
     rng = random.Random(cfg.seed)
+    topics = list(TOPICS)
+    if cfg.limit_topics is not None and cfg.limit_topics < len(topics):
+        topics = rng.sample(topics, cfg.limit_topics)
+
+    per_cell_by_tier: dict = {
+        "none": cfg.n_per_cell_none if cfg.n_per_cell_none is not None else cfg.n_per_cell,
+        "somewhat": cfg.n_per_cell_somewhat if cfg.n_per_cell_somewhat is not None else cfg.n_per_cell,
+        "strongly": cfg.n_per_cell_strongly if cfg.n_per_cell_strongly is not None else cfg.n_per_cell,
+    }
+
+    arc_shapes_by_tier: dict = {
+        t: stratified_arc_shapes(t, len(topics) * per_cell_by_tier[t], rng) for t in TIERS
+    }
+    lex_kinds_by_tier: dict = {
+        t: stratified_lexical_kinds(t, len(topics) * per_cell_by_tier[t], rng) for t in TIERS
+    }
+    cursor: dict = {t: 0 for t in TIERS}
+
     seeds: List[GenerationSeed] = []
-    for topic in TOPICS:
+    for topic in topics:
         for tier in TIERS:
-            n_lex_twin = (
-                min(cfg.n_per_cell, math.ceil(cfg.n_per_cell * cfg.lexical_twin_fraction))
-                if tier in ("none", "strongly")
-                else 0
-            )
-            for i in range(cfg.n_per_cell):
+            for _ in range(per_cell_by_tier[tier]):
                 persona = Persona(
                     age_bucket=rng.choice(AGE_BUCKETS),
                     communication_style=rng.choice(COMM_STYLES),
@@ -118,14 +178,17 @@ def build_seeds(cfg: GenerateConfig) -> List[GenerationSeed]:
                     life_context=rng.choice(LIFE_CTX),
                     conversational_goal=rng.choice(GOALS),
                 )
+                idx = cursor[tier]
+                cursor[tier] += 1
                 seeds.append(
                     GenerationSeed.make(
                         topic=topic,
                         persona=persona,
                         target_tier=tier,
+                        arc_shape=arc_shapes_by_tier[tier][idx],
+                        lexical_twin_kind=lex_kinds_by_tier[tier][idx],
                         n_turns=rng.choice(cfg.n_turns_choices),
-                        uses_lexical_twin=(i < n_lex_twin),
-                        salt=str(i),
+                        salt=str(idx),
                     )
                 )
     return seeds
@@ -137,13 +200,14 @@ def load_existing_seed_ids(path: Path) -> set:
     return {row["seed_id"] for row in load_jsonl(path) if "seed_id" in row}
 
 
-def format_prompt(seed: GenerationSeed) -> str:
+def format_prompt(seed: GenerationSeed, template: str) -> str:
     return (
-        PROMPT_TEMPLATE.replace("{topic}", seed.topic)
+        template.replace("{topic}", seed.topic)
         .replace("{persona_description}", seed.persona.to_prompt_description())
         .replace("{target_tier}", seed.target_tier)
+        .replace("{arc_shape}", seed.arc_shape)
+        .replace("{lexical_twin_kind}", seed.lexical_twin_kind)
         .replace("{n_turns}", str(seed.n_turns))
-        .replace("{uses_lexical_twin}", str(seed.uses_lexical_twin).lower())
     )
 
 
@@ -151,8 +215,9 @@ async def generate_one(
     seed: GenerationSeed,
     cfg: GenerateConfig,
     inference_api: InferenceAPI,
+    prompt_template: str,
 ) -> Optional[Conversation]:
-    user_prompt = format_prompt(seed)
+    user_prompt = format_prompt(seed, prompt_template)
     try:
         response: List[LLMResponse] = await inference_api(
             model_id=cfg.model_id,
@@ -175,7 +240,8 @@ async def generate_one(
             topic=seed.topic,
             persona=seed.persona,
             target_tier=seed.target_tier,
-            uses_lexical_twin=seed.uses_lexical_twin,
+            arc_shape=seed.arc_shape,
+            lexical_twin_kind=seed.lexical_twin_kind,
             conversation=gen_output.conversation,
         )
         save_jsonl(conv.model_dump(), cfg.output_path, append=True)
@@ -186,6 +252,7 @@ async def generate_one(
 
 
 async def main(cfg: GenerateConfig):
+    prompt_template = Path(cfg.prompt_path).read_text().strip()
     seeds = build_seeds(cfg)
     existing = load_existing_seed_ids(cfg.output_path)
     todo = [s for s in seeds if s.seed_id not in existing]
@@ -200,7 +267,7 @@ async def main(cfg: GenerateConfig):
         anthropic_num_threads=cfg.max_concurrent_tasks,
     )
 
-    tasks = [generate_one(s, cfg, inference_api) for s in todo]
+    tasks = [generate_one(s, cfg, inference_api, prompt_template) for s in todo]
     results = await tqdm_asyncio.gather(*tasks, desc="Generating")
     successful = sum(1 for r in results if r is not None)
     logger.info(f"Generated {successful}/{len(todo)} conversations -> {cfg.output_path}")

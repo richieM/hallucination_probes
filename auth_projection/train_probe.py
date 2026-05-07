@@ -80,7 +80,6 @@ def fit_eval(X_train, y_train, X_test, y_test) -> Dict:
     clf = LogisticRegression(
         max_iter=2000,
         class_weight="balanced",
-        multi_class="multinomial",
         solver="lbfgs",
     ).fit(X_train, y_train)
 

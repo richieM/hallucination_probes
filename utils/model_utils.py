@@ -38,7 +38,11 @@ def load_model_and_tokenizer(
     """
     # Set default dtype
     if torch_dtype is None:
-        torch_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        if torch.cuda.is_available():
+            torch_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        else:
+            # MPS and CPU both support bf16 in modern PyTorch
+            torch_dtype = torch.bfloat16
     
     # Load model
     model = AutoModelForCausalLM.from_pretrained(

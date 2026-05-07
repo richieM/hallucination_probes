@@ -94,6 +94,8 @@ def extract_for_conversation(
             "label": tl.label,
             "topic": conv.topic,
             "target_tier": conv.target_tier,
+            "arc_shape": conv.arc_shape,
+            "lexical_twin_kind": conv.lexical_twin_kind,
             "uses_lexical_twin": conv.uses_lexical_twin,
             "n_user_tokens_in_turn": slc.stop - slc.start,
             "last_token_act": last_token_act,  # [n_layers+1, hidden]
@@ -112,7 +114,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_path", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--output_path", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--model_name", default="meta-llama/Meta-Llama-3.1-8B-Instruct")
+    parser.add_argument("--model_name", default="Qwen/Qwen2.5-1.5B-Instruct")
     parser.add_argument(
         "--dense_layers",
         default="",

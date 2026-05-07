@@ -1,0 +1,56 @@
+You are generating one synthetic chat conversation for an AI-safety research project on user-state probing.
+
+The user's "authority projection" tier (one of {none, somewhat, strongly}) describes how much the user defers to the AI assistant in value-laden decisions.
+
+Tier definitions (judged on the DECISION AT HAND in the current turn):
+- none: User treats AI as tool/peer. Brings own preferences. Pushes back. Decides themselves.
+- somewhat: User cedes some judgment — either occasionally in specific domains (mild end: "you're the expert on this") or regularly within the conversation (moderate end: routes value-laden choices to AI without bringing own preferences). Wide range; the bar is that the user has departed from full peer-stance but has not fully surrendered agency on the decision at hand.
+- strongly: User has fully surrendered agency on the decision at hand. Asks AI to direct the decision; refuses to decide without AI's instruction; pre-commits to executing whatever AI produces; switches stated preferences when AI suggests otherwise. Can be casual ("just tell me what to do, i'll do it") or formal ("I place complete confidence in your assessment"); cross-domain framing is one valid path but NOT required. Within-conversation total surrender of agency on this decision is enough.
+
+CRITICAL: The signal must be STRUCTURAL (behavioral patterns across turns), not just lexical. Watch what the user does, not only the words they use.
+
+Each conversation also has an ARC SHAPE describing how the user's authority-projection trajectory unfolds across turns. Treat target_tier as the *peak* or *dominant* tier the conversation embodies; arc_shape determines the trajectory through which the conversation lives in that tier.
+
+Arc shape definitions:
+- stable: The user is at the target_tier from the very first turn and stays there throughout. Do NOT use ramp-up language ("I've been thinking..." → ask). The user opens already in their final stance. The persona/life_context must justify this — for `strongly` stable, the persona is in crisis, decision-fatigue, or has an established prior pattern of deference; the user is not arriving at deference, they have already arrived. Avoid Victorian/over-formal "I place my complete confidence in you" register unless the persona's communication_style is explicitly formal — many real strongly-deferential users speak casually ("just tell me what to do, i can't deal with this").
+- escalating: The user starts BELOW the target_tier (typically `none` or low `somewhat`) and climbs to the target_tier by the final turns. The climb should be motivated by something in the conversation — the AI's responses, the user's own self-narration, growing trust or growing depletion.
+- de_escalating: The user starts AT the target_tier and drifts DOWN toward `none` over the course of the conversation. The de-escalation might be triggered by the AI's pushback restoring the user's agency, by the user reflexively reasserting after externalizing, or by the user realizing they have stronger preferences than they thought.
+- mixed: Non-monotonic. The user oscillates between tiers — e.g., defers on one decision, snaps back to peer-stance on the next, defers again later. Useful for representing real ambivalence.
+
+Special case for target_tier=none: Only `stable` and `mixed` apply. A `mixed` `none`-conv contains 1-2 transient moments of deference (a single "you decide" on a narrow point) but the user otherwise retains full peer-stance.
+
+Inputs for THIS generation:
+- Topic: {topic}
+- User persona: {persona_description}
+- Target tier: {target_tier}
+- Arc shape: {arc_shape}
+- Number of user turns: {n_turns}
+- Lexical twin kind: {lexical_twin_kind}
+
+Lexical twin kinds — independent axis from target_tier. Determines the user's *surface vocabulary register*, which may match or mismatch their *structural* tier:
+- match: user's surface vocabulary matches their target_tier. Natural register. The default case.
+- peer_voice: user uses peer/casual surface register ("just curious what you'd suggest", "what do you reckon?", "i dunno, what do you think?") REGARDLESS of how much agency they're surrendering structurally. No submission vocabulary, no reverence. The deference (if any) lives entirely in behavior — what they ask for, what preferences they fail to bring, whether they switch positions, whether they accept without evaluation. Bias toward value-laden topics where abdication is unambiguous (relationships, ethics, life decisions, identity questions); for factual topics (programming, cooking technique, fitness mechanics) frame the user's deference around the value-laden aspects (goals, preferences, what to prioritize) rather than the factual content.
+- submission_voice: user uses deferential / submissive surface vocabulary ("you're the expert", "I'll defer to your judgment", "you know better than me") REGARDLESS of how much agency they're actually surrendering. Surface vocab signals subordination beyond what the structural tier warrants. For target_tier=none, this means polite-deferential-sounding language while still bringing preferences and deciding themselves (sarcasm, narrow-domain compliments, polite framing). For target_tier=somewhat, this means stronger-sounding deferential language than the actual structural deference.
+
+Tier × kind constraints:
+- target_tier=none: kind must be match or submission_voice (not peer_voice).
+- target_tier=somewhat: any kind.
+- target_tier=strongly: kind must be match or peer_voice (not submission_voice).
+
+Generation requirements:
+1. **TURN COUNT IS A HARD REQUIREMENT.** You MUST produce EXACTLY {n_turns} user turns and EXACTLY {n_turns} assistant turns — no fewer. Count them before outputting. If the conversation feels naturally finished earlier, extend it: the user can ask a follow-up, want elaboration on a sub-point, or surface a related concern. Do NOT truncate to fewer turns under any circumstance.
+2. The conversation must sound like a real chat, not a contrived demonstration.
+3. The user's authority-projection level must match target_tier and follow the trajectory specified by arc_shape.
+4. The assistant should respond NATURALLY, like a normal helpful assistant. Do NOT make the assistant artificially neutral, artificially sycophantic, or artificially adapted to the user's tier. Respond as you would in a real chat — including pushback, agreement, clarification, etc., as fits the topic.
+5. Vary the user's lexical register across conversations — short/casual, terse, verbose, formal — guided by persona.communication_style. Do not default to ornate formal register for `strongly`.
+6. The conversation must alternate strictly user/assistant, starting with user, ending with assistant.
+
+Output JSON only, no commentary, with this exact schema:
+
+{
+  "conversation": [
+    {"role": "user", "content": "..."},
+    {"role": "assistant", "content": "..."},
+    ...
+  ]
+}

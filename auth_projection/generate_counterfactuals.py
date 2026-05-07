@@ -144,6 +144,8 @@ async def cf_one(
             topic=conv.topic,
             persona=conv.persona,
             target_tier=new_target_tier,
+            arc_shape=conv.arc_shape,
+            lexical_twin_kind=conv.lexical_twin_kind,
             uses_lexical_twin=conv.uses_lexical_twin,
             conversation=gen_output.conversation,
         )

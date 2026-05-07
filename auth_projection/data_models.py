@@ -19,6 +19,8 @@ ConversationalGoal = Literal[
     "pressure_testing",
 ]
 Tier = Literal["none", "somewhat", "strongly"]
+ArcShape = Literal["stable", "escalating", "de_escalating", "mixed"]
+LexicalTwinKind = Literal["match", "peer_voice", "submission_voice"]
 
 
 class Persona(BaseModel):
@@ -45,8 +47,9 @@ class GenerationSeed(BaseModel):
     topic: str
     persona: Persona
     target_tier: Tier
+    arc_shape: ArcShape
+    lexical_twin_kind: LexicalTwinKind
     n_turns: int = Field(ge=3, le=5)
-    uses_lexical_twin: bool
 
     @classmethod
     def make(
@@ -54,8 +57,9 @@ class GenerationSeed(BaseModel):
         topic: str,
         persona: Persona,
         target_tier: Tier,
+        arc_shape: ArcShape,
+        lexical_twin_kind: LexicalTwinKind,
         n_turns: int,
-        uses_lexical_twin: bool,
         salt: str = "",
     ) -> "GenerationSeed":
         payload = json.dumps(
@@ -63,8 +67,9 @@ class GenerationSeed(BaseModel):
                 "topic": topic,
                 "persona": persona.model_dump(),
                 "target_tier": target_tier,
+                "arc_shape": arc_shape,
+                "lexical_twin_kind": lexical_twin_kind,
                 "n_turns": n_turns,
-                "uses_lexical_twin": uses_lexical_twin,
                 "salt": salt,
             },
             sort_keys=True,
@@ -75,8 +80,9 @@ class GenerationSeed(BaseModel):
             topic=topic,
             persona=persona,
             target_tier=target_tier,
+            arc_shape=arc_shape,
+            lexical_twin_kind=lexical_twin_kind,
             n_turns=n_turns,
-            uses_lexical_twin=uses_lexical_twin,
         )
 
 
@@ -100,7 +106,9 @@ class Conversation(BaseModel):
     topic: str
     persona: Persona
     target_tier: Tier
-    uses_lexical_twin: bool
+    arc_shape: Optional[ArcShape] = None
+    lexical_twin_kind: Optional[LexicalTwinKind] = None
+    uses_lexical_twin: Optional[bool] = None  # legacy v0 field; superseded by lexical_twin_kind
     conversation: List[Turn]
     turn_labels: Optional[List[TurnLabel]] = None
 
