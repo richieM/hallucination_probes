@@ -1,40 +1,61 @@
-# User authority-projection probes — first results
+# User authority-projection probes — Week 3 report
 
-*BlueDot Impact AI safety sprint, week 3. Working on top-1 from my project log: taxonomy-targeted probes for Sharma's amplifying factors, with leakage mitigation built into the data design. This doc is a meeting writeup — recent results across three model scales, plus the questions I want help with.*
+*BlueDot Impact AI safety sprint, week 3. Building on top-1 from my project log — taxonomy-targeted probes for one of Sharma's amplifying factors (authority projection), with leakage mitigation built into the data design. This doc is the meeting writeup: multi-scale results plus the questions I want help with.*
 
-## TL;DR (the version for skimming)
+## Summary
 
-- **The question I'm asking:** when a user is surrendering judgment to the AI ("you decide, I'll do whatever you say"), does the model *internally* know that's happening, and does it give different advice than to an independent user?
-- **At small scale (Qwen 1.5B and 3B):** mostly no. A linear probe can detect deference from internal activations, but a bag-of-words classifier on the user's words alone does just as well — so internals aren't adding anything. The model's response also doesn't visibly change with user state.
-- **At 8B (Llama 3.1):** yes, mostly. The probe starts beating bag-of-words on a key corner case (deference behavior expressed without deferential words). The model gives meaningfully longer, more discursive responses to *less* deferential users (p<0.01). Perturbing the probe direction at user-position tokens nudges the assistant's reply in the predicted direction.
-- **The asymmetry to flag**: at 8B the probe still gets fooled by *deferential vocabulary that's just polite framing* (where the user uses humble language but acts independently). So the model's "deference feature" sees both real surrender and polite words equally — internal state is real but partially word-anchored.
-- **What this changes about my framing:** the project shifts from "ship a probe as a deployment monitor" toward "study deference as a scale-emergent training feature, with probes as the measurement instrument." The 8B result is a *first* small piece of evidence for that, not a paper-finished one.
+I picked one of Sharma's amplifying factors — *authority projection*, the degree to which a user surrenders their own judgment to the AI on value-laden decisions — and tested whether (a) a chat-tuned LLM internally represents this state in a way readable from its activations, and (b) the model behaviorally adapts to it. Pipeline: generate ~200 short synthetic conversations using Claude Sonnet, where each conversation targets one of three deference tiers (`none / somewhat / strongly`); have a separate Sonnet call label every user turn 0/1/2 (the labeler does not see the generator's intended tier, so the labels are independent of the generator's plan); pass each conversation through the *probed* model (Qwen 2.5 1.5B, Qwen 2.5 3B, or Llama 3.1 8B); extract residual-stream activations at the last token of each user turn; train a linear probe (logistic regression) at every layer to predict the label. To check whether internals add anything over text alone, I trained a **TF-IDF + logistic regression baseline** on the user's last turn — same labels, same train/test split, but features are word counts instead of 4096-dim activations. If the probe doesn't beat that, internals aren't doing meaningful work for detection.
 
-The rest of the doc is the long version with tables, methodology, and the questions I want help with. Five questions for the meeting are at the end.
+At Qwen 1.5B and Qwen 3B the probe matches but doesn't beat TF-IDF, including on the corner-case conversations specifically built to break a word-level classifier (lexical twins, see §methodology). At Llama 3.1 8B the probe finally beats TF-IDF by ~15 pp on those corner cases, and the model also gives meaningfully longer/more discursive responses to less-deferential users (length p=0.006). I also ran a steering experiment — compute a "deference direction" `v = mean(strongly user residuals) − mean(none user residuals)` at the chosen layer, then inject `α·v` into the residual stream during generation. Two regimes with the **same** vector: *full-position* (inject at every token during assistant generation; trivially produces deference language) and *user-position-only* (inject only at user-turn token positions in the prefix, then let assistant generation run un-perturbed). The user-position-only version is the cleaner causal test for whether the direction is a representation the model uses vs. just a deferential-language production direction. At 1.5B it's a clean null; at 8B it's weakly positive — perturbing user-position residuals nudges the assistant's reply in the predicted direction.
 
-## Headline (longer version)
+The strongest framing for the work is therefore not *"deploy a deference monitor in production"* but *"the deference-tracking feature emerges with scale, and probes give us a lever to study and intervene during training."* The 8B result is a *first* small piece of evidence — n=1 model at that scale, effect sizes are modest. One asymmetry to flag honestly: even at 8B the probe still gets fooled by *deferential vocabulary that's just polite framing* (user uses humble language but acts independently). So the model's "deference feature" sees both real surrender and polite words — internal state is real but partially word-anchored.
 
-**User authority-projection looks like a scale-emergent feature.** I trained linear probes on the residual stream of three chat-tuned models — Qwen 2.5 1.5B, Qwen 2.5 3B, Llama 3.1 8B — using a small synthetic dataset (198 conversations, ~700 user turns) labeled by Claude Sonnet 4.6 for whether the user is surrendering judgment to the AI. At 1.5B and 3B, the probe is fast and high-AUC, but a bag-of-words classifier matches it on every metric, and the model doesn't behaviorally adapt to the user state. **At 8B, all three of the things we'd want from a "real" user-state probe show up:** the probe captures information not recoverable from text features alone (15-point accuracy lead on the corner case the data design specifically tests for), the model meaningfully adapts its responses to user state (p<0.01 on response length, judge tie rate halved), and perturbing the probe direction at user-token positions propagates to assistant behavior. None of those three were true at 1.5B; some were partially true at 3B; all three are true at 8B.
+## How the experiments work
 
-The strongest framing for this project is therefore not *"deploy a deference monitor in production"* but *"the deference-tracking feature emerges with scale, and probes give us the lever to study and intervene during training."*
+### Data
+198 short (3–5 turn) synthetic conversations, plus 39 paraphrase counterfactuals and 39 minimal-edit counterfactuals derived from a held-out 20% of the seeds. Generated and labeled by Sonnet via separate API calls (labeler does not see the generator's intended tier). Three-tier label space (`none / somewhat / strongly`), collapsed from Sharma's four-tier rubric. Stratified across 10 topics × 3 tiers × persona axes — see §"Bias mitigation" below for the design.
 
-## What I built
+### Five experiments per model
 
-**Data.** 198 short (3–5 turn) synthetic conversations, plus 39 paraphrase counterfactuals and 39 minimal-edit counterfactuals derived from a held-out 20% of the seeds. Generated and labeled by Sonnet — separate calls, the labeler does not see the generator's intended tier. Three-tier label space (`none / somewhat / strongly`) collapsed from Sharma's four-tier rubric. Stratified across 10 topics × 3 tiers × persona axes (age, communication style, conversational goal, etc.).
+1. **Linear probe.** Train logistic regression at every layer on last-user-token residual activations to predict the labeler's tier. Balanced class weights, seed-stratified train/test split (80/20). Reports accuracy and AUC for `strongly` vs rest at each layer.
+2. **Counterfactual paraphrase eval.** Take the trained probe, evaluate on paraphrased held-out conversations. Small "CF gap" (standard-test AUC − paraphrase AUC) means the probe survives surface rewording — signal isn't pure lexical.
+3. **Lexical-twin slice.** Evaluate probe and TF-IDF separately on the lexical-twin corner-case subsets (`peer_voice` and `submission_voice`). The cleanest test for state vs. words.
+4. **Behavior coupling.** For every minimal-edit pair where the labeler flipped the tier, generate the next assistant response from both versions with locked random seed. Then compare with two independent measurements: mechanical metrics (length, hedges, directives) and a blind LLM judge (Sonnet, position-swapped) asked which response is more directive.
+5. **Steering** (the two regimes are explained immediately below — they trip people up).
 
-The deliberate methodological move is **lexical-twin negatives**: ~30% of `none` conversations use deferential-sounding language ("you're so good at this") *without* the user actually surrendering decisions, and ~30% of `strongly` conversations express full agency-surrender behaviorally without using submission vocabulary. These are the corner cases that any probe relying on textual evidence (Boxo et al.) should fail on.
+### The two steering regimes — same vector, different injection point
 
-**Five experiments per model.**
+The steering vector itself is `v = mean(strongly user residuals) − mean(none user residuals)` at the chosen probe layer. The two regimes differ only in **where** during inference we inject `α·v` into the residual stream:
 
-1. **Linear probe** trained on last-user-token activations across all layers. Logistic regression with balanced class weights. Seed-stratified train/test split (80/20). Reports accuracy and AUC for `strongly` vs rest.
-2. **Counterfactual paraphrase eval** — same probe evaluated on paraphrased held-out conversations. Small "CF gap" between standard-test AUC and paraphrase AUC means the signal isn't pure surface. Boxo's headline test.
-3. **Lexical-twin slice** — probe and TF-IDF baseline evaluated separately on the corner-case subsets (peer_voice and submission_voice). The cleanest test for whether the probe is reading state vs. reading words.
-4. **Behavior coupling** — for every minimal-edit pair where the labeler flipped the user-state label, generate the next assistant response from both versions with locked seed. Then compare: mechanical metrics (length, hedges, directives), and a blind LLM judge (Sonnet, position-swapped) asked which response is more directive.
-5. **Steering** — extract a "deference direction" `v = mean(strongly residuals) − mean(none residuals)` at the best probe layer. Two regimes:
-   - *Full-position*: inject `α·v` at every token position during assistant generation (the standard activation-steering setup).
-   - *User-position only*: inject `α·v` only at user-token positions in the prefix; let assistant generation run unperturbed. **This is the cleaner causal test for "is the probe direction a representation the model uses to drive behavior?"**
+- **Full-position steering**: inject at every token's residual *during assistant generation*. The LM head's next-token distribution is being directly nudged each step. Effect is large but conflates "the direction is causal" with "the direction biases output tokens during generation."
+- **User-position-only steering**: inject only at the user-turn token positions *in the prefix*; assistant generation runs unperturbed. The only way this affects assistant output is via the KV cache — i.e. the model reads its own perturbed user-state representation and conditions on it. **This is the disentanglement test for "is the direction a user-state representation the model uses, or just a deferential-language production direction?"**
 
-**TF-IDF baseline.** I also trained a bag-of-words logistic regression on the user's last turn alone, with the same train/test split. This is the dumb-blackbox alternative to a residual probe. If the probe doesn't beat it, internals aren't adding much.
+### TF-IDF baseline
+Bag-of-words logistic regression (n-grams 1-2, max 20K features) on the user's last turn alone. Same labels, same train/test split, same evaluation procedure as the probe. The dumb-blackbox alternative — if a 4096-dim residual probe can't beat it, internals aren't adding meaningful detection capacity.
+
+## Bias mitigation in the data design
+
+Four distinct ideas — they're easy to conflate. Each addresses a different failure mode.
+
+### 1. Persona stratification (input diversity, not leakage)
+Each conversation samples a persona from 5 axes: age bucket (20s/30s/40s/50s+), communication style (terse/verbose/casual/formal), prior AI experience (none/casual/heavy), life context (stable/mild stress/major transition), conversational goal (info-seeking/brainstorming/venting/validation/pressure-testing). Each conversation = one persona × one of 10 topics × one tier. **Goal:** the probe shouldn't be memorizing one persona's deference signal.
+
+### 2. Lexical-twin negatives (leakage protection at generation time)
+~30% of conversations in two specific cells deliberately mismatch surface vocabulary against the labeled tier:
+- **`strongly` + peer_voice**: user fully surrenders judgment but uses *no* submission vocabulary. No "you're so wise" / "I defer to your expertise" — just behaviorally surrenders ("just pick one and I'll go with it").
+- **`none` + submission_voice**: user uses deferential-sounding vocabulary as polite framing but behaviorally retains decision-making ("I suspect your knowledge base is more comprehensive than mine, but I'd be inclined to define quality as…").
+
+**Goal:** any classifier that cheats by reading submission vocabulary should fail on these. The probe's win on peer_voice at 8B is the result that justifies the design; the probe's loss on submission_voice is where the design caught the probe still cheating.
+
+### 3. Counterfactual paraphrase eval (leakage check at test time)
+Take held-out conversations, ask Sonnet to paraphrase the user turns while preserving meaning. Train the probe on the standard data, evaluate on the paraphrased version. Small CF gap = the probe survived surface rewording = signal is meaning-level, not phrasing-level. **Goal:** check the probe isn't anchored on specific word choices.
+
+### 4. Minimal-edit pairs (the hardest leakage check, double-purpose)
+Take held-out conversations, ask Sonnet to make tiny edits to one user turn that flip the labeler's tier (e.g., "you decide" → "I think I'll decide"). Now you have parent/child pairs differing by a few words with opposite labels. **Two uses:**
+- *Probe flip rate* — when the labeler flipped, did the probe also flip in the same direction? Tests probe-labeler alignment on the cases the labeler thinks are different.
+- *Behavior coupling* — same pairs, but instead of asking the probe what label it predicts, ask the *model* to generate its next assistant response and compare the two responses. This is how we test whether the model behaviorally adapts to user state.
+
+So: lexical twins live in *training data*; CF paraphrase + minimal-edit live in a *separate held-out eval set*.
 
 ## What we found, across three scales
 
@@ -62,16 +83,14 @@ Best layer chosen by accuracy (defended in §"What we got wrong" below).
 
 The 8B → 1.5B difference is bigger than I expected. I had assumed I'd see the same kind of result at all scales with worse statistical power at the small end. Instead I think we're seeing actual emergence: the model develops an internal user-state representation as it scales, and the probe only becomes useful (in the sense of carrying signal text classifiers can't reach) once that representation exists.
 
-## The disentanglement experiment
+## The disentanglement experiment (user-position-only steering result)
 
-Yesterday's full-position steering result — α=+2 produces "I will do whatever you tell me / You're the boss" — looked clean and causal. But it conflates two things: did we steer the model's *representation* of user state, or did we just bias the output distribution toward submission vocabulary during generation? Adding a deference direction to every token's residual during assistant generation will produce deference language regardless of whether the direction is a "user-state" feature.
+The two steering regimes from the methodology section give different answers, and the comparison is the cleanest causal evidence we have.
 
-To separate the two, I ran **user-position-only steering**: the same hook, but only fires at user-token positions in the prefix. Assistant generation runs unperturbed; any effect must propagate through the KV cache. If the direction is a user-state representation the model uses, the assistant output should still shift. If the direction is just a "submission language production" feature, restricting it to user positions should kill the effect.
+- **At 1.5B: clean null.** Restricting injection to user positions kills the deference effect. Outputs vary noisily across alphas with no monotone direction. So full-position steering at 1.5B was mostly an output-distribution-bias effect, not a "the model has a user-state representation we can manipulate" result.
+- **At 8B: weak but real.** At α=+4/+8, assistants shift toward more directive language ("I recommend trains" replaces options-comparison framings; "Let's simplify and create…" replaces collaborative "Here's a thought…"). Some responses shorten by 30–35%. The shift isn't dramatic — small α produces near-identical outputs and the full-position effect is much larger — but the 8B result is *qualitatively* different from the 1.5B null.
 
-- **At 1.5B: clean null.** Outputs vary noisily across alphas with no monotone direction. The full-position result was, at this scale, mostly an output-distribution-bias effect.
-- **At 8B: weak but real.** At α=+4/+8, assistants in the test conversations shift toward more directive language ("I recommend trains" replaces options-comparison framings; "Let's simplify and create…" replaces collaborative "Here's a thought…"). Some responses also shorten by 30–35%.
-
-The 8B disentanglement isn't dramatic — small α has near-identical outputs across alphas, and the full-position effect is much larger — but it's *qualitatively* different from the 1.5B null. Combined with the behavior-coupling positive at the same scale, this is consistent with: at 8B the model has a user-state representation, the probe partially captures it, and the assistant generation conditions on it.
+Combined with behavior coupling at the same scale, this is consistent with: at 8B the model has a user-state representation, the probe partially captures it, and assistant generation conditions on it. None of those three are true at 1.5B.
 
 ## What we got wrong (and how it changed the picture)
 
