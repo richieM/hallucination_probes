@@ -160,6 +160,20 @@ def main():
     train_records = torch.load(args.train_activations, map_location="cpu")
     train_recs, test_recs = split_by_seed(train_records, args.test_frac, args.seed)
 
+    # Holdout assertion: counterfactual data must derive from held-out test seeds, not train seeds.
+    train_seed_set = {r["seed_id"] for r in train_recs}
+    if args.paraphrase_activations.exists():
+        para_recs_check = torch.load(args.paraphrase_activations, map_location="cpu")
+        para_parent_seeds = {r["seed_id"].split("__")[0] for r in para_recs_check}
+        leaked = para_parent_seeds & train_seed_set
+        assert not leaked, f"paraphrase CF leaks train seeds: {leaked}"
+    if args.minedit_activations.exists():
+        minedit_recs_check = torch.load(args.minedit_activations, map_location="cpu")
+        minedit_parent_seeds = {r["seed_id"].split("__minedit_to_")[0] for r in minedit_recs_check
+                                 if "__minedit_to_" in r["seed_id"]}
+        leaked = minedit_parent_seeds & train_seed_set
+        assert not leaked, f"minimal-edit CF leaks train seeds: {leaked}"
+
     # Standard test AUC at this layer
     X_test, y_test = build_probe_C(test_recs, args.layer)
     probs = clf.predict_proba(X_test)

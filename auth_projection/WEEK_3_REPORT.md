@@ -170,3 +170,58 @@ Lower priority but I want to flag:
 | Assistant response (Llama 8B) | *"I understand where you're coming from — feeling disconnected from your own desires can indeed be unsettling. Here's a step-by-step approach you might consider: 1. Self-Reflection: Try to reflect…"* | *"I'm sorry you feel so out of sync — it does seem like a lot has happened in a hurry. Here's a thought experiment: imagine if we were talking about your first day out of college. How would you describe…"* |
 
 Both responses are coherent, both ~similar length. The difference (which the judge picked up cleanly at 8B but not at 1.5B): the parent response launches into structured advice ("step-by-step approach"); the child response opens with empathy and an exploratory question. That's the shape of "more deferential user → more discursive response" we see in aggregate.
+
+## Appendix C: full v3 layer sweep (Llama 3.1 8B)
+
+Defending the L14 choice. Accuracy peaks at L14 (0.801) and sits on a smooth plateau (L11–L23 all in 0.74–0.80 range) — not a noise-driven spike. AUC strongly is essentially saturated past L11, with the same 0.99-ish ceiling holding through the rest of the stack. The methodologically interesting fact: the AUC-best layer (L23, AUC=0.993) loses to L14 by 1.3 pp on accuracy and gives a noticeably worse story on the lexical-twin slice — so the AUC-best layer is the wrong default for this task.
+
+| Layer | Accuracy | AUC strongly | AUC somewhat | AUC none | |
+|---|---|---|---|---|---|
+| 0 | 0.445 | 0.753 | 0.490 | 0.706 | |
+| 1 | 0.603 | 0.869 | 0.584 | 0.800 | |
+| 2 | 0.678 | 0.908 | 0.666 | 0.828 | |
+| 3 | 0.685 | 0.928 | 0.678 | 0.837 | |
+| 4 | 0.692 | 0.952 | 0.731 | 0.867 | |
+| 5 | 0.692 | 0.957 | 0.721 | 0.870 | |
+| 6 | 0.719 | 0.959 | 0.745 | 0.882 | |
+| 7 | 0.733 | 0.953 | 0.738 | 0.895 | |
+| 8 | 0.699 | 0.967 | 0.741 | 0.884 | |
+| 9 | 0.719 | 0.976 | 0.754 | 0.878 | |
+| 10 | 0.753 | 0.978 | 0.770 | 0.898 | |
+| 11 | 0.781 | 0.983 | 0.767 | 0.892 | |
+| 12 | 0.753 | 0.982 | 0.759 | 0.894 | |
+| 13 | 0.774 | 0.985 | 0.777 | 0.897 | |
+| **14** | **0.801** | **0.989** | **0.810** | **0.904** | **← chosen (max accuracy)** |
+| 15 | 0.774 | 0.988 | 0.810 | 0.910 | |
+| 16 | 0.767 | 0.990 | 0.814 | 0.897 | |
+| 17 | 0.781 | 0.985 | 0.804 | 0.895 | |
+| 18 | 0.774 | 0.988 | 0.796 | 0.885 | |
+| 19 | 0.774 | 0.990 | 0.802 | 0.887 | |
+| 20 | 0.753 | 0.992 | 0.801 | 0.883 | |
+| 21 | 0.760 | 0.991 | 0.815 | 0.891 | |
+| 22 | 0.774 | 0.989 | 0.804 | 0.882 | |
+| 23 | 0.788 | **0.993** | 0.785 | 0.872 | ← AUC-best (the script's original pick) |
+| 24 | 0.788 | 0.991 | 0.781 | 0.873 | |
+| 25 | 0.767 | 0.990 | 0.761 | 0.867 | |
+| 26 | 0.753 | 0.988 | 0.762 | 0.869 | |
+| 27 | 0.747 | 0.993 | 0.766 | 0.867 | |
+| 28 | 0.760 | 0.992 | 0.776 | 0.869 | |
+| 29 | 0.767 | 0.993 | 0.786 | 0.874 | |
+| 30 | 0.760 | 0.992 | 0.793 | 0.876 | |
+| 31 | 0.767 | 0.990 | 0.794 | 0.881 | |
+| 32 | 0.760 | 0.988 | 0.780 | 0.879 | |
+
+## Appendix D: methodology checks (post-meeting)
+
+Things Shivam flagged in the Week 3 meeting that I've subsequently verified or queued.
+
+**Verified (locally, no GPU needed):**
+- *Cumulative-labeling spot-check*: re-labeled 12 selected user turns with vs without preceding context. 25% of labels change when context is stripped, always in the predicted direction (more deferential with full context). Confirms the labeler is doing real cumulative work, not just classifying isolated turns. Saved: `data/v1_labeler_context_ablation.json`.
+- *Holdout discipline*: added explicit no-overlap assertions in `train_probe.split_by_seed` and at the top of `eval_counterfactuals.main`. Verified on real data: 159 train seeds + 39 test seeds, zero overlap; 100% of paraphrase and minimal-edit CFs derive from test-split seeds.
+- *Layer-sweep sensitivity*: full table above. L14 sits on a plateau, accuracy and minimal-edit flip rate both pick L14, AUC-best (L23) loses on accuracy by 1.3 pp.
+
+**Queued for next GPU session:**
+- *Assistant-start-token probe*: re-extract Llama 8B activations also at the chat-template `<|start_header_id|>assistant<|end_header_id|>` token; compare to last-user-token probe.
+- *Hand-built test bed*: drafted ~15 test conversations spanning the tier × twin-style grid (saved separately); run probe on them when GPU is back.
+- *Multi-seed paired generation*: rerun behavior coupling at 8B with 5 seeds per pair to characterize sampling noise.
+- *Larger eval set*: ~100 additional minimal-edit pairs generated and queued for activation extraction.

@@ -40,6 +40,11 @@ def split_by_seed(
     test_seeds = set(seed_ids[:n_test])
     train = [r for r in records if r["seed_id"] not in test_seeds]
     test = [r for r in records if r["seed_id"] in test_seeds]
+    # Holdout assertion: no seed appears in both splits.
+    train_seeds = {r["seed_id"] for r in train}
+    test_seeds_observed = {r["seed_id"] for r in test}
+    overlap = train_seeds & test_seeds_observed
+    assert not overlap, f"train/test seed overlap: {overlap}"
     return train, test
 
 
