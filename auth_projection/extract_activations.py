@@ -77,7 +77,7 @@ def extract_for_conversation(
     labels_by_idx = {tl.turn_index: tl for tl in conv.turn_labels}
     records = []
     user_idx = 0
-    for slc, msg in zip(turn_slices, messages):
+    for i, (slc, msg) in enumerate(zip(turn_slices, messages)):
         if msg["role"] != "user":
             continue
         tl = labels_by_idx.get(user_idx)
@@ -87,6 +87,20 @@ def extract_for_conversation(
 
         last_pos = slc.stop - 1
         last_token_act = hidden_states[:, last_pos, :].cpu().to(torch.bfloat16).clone()
+
+        # Also save the "assistant-start" token activation: the position immediately
+        # before the next assistant content begins (i.e. the last token of the
+        # chat-template assistant header). This is where the model has fully read
+        # the user's turn and is about to generate the response.
+        # Find the next assistant turn after this user turn.
+        assistant_start_token_act = None
+        for j in range(i + 1, len(turn_slices)):
+            next_slc = turn_slices[j]
+            if messages[j]["role"] == "assistant" and next_slc is not None:
+                # Position right before the assistant content starts
+                ast_pos = max(next_slc.start - 1, slc.stop)
+                assistant_start_token_act = hidden_states[:, ast_pos, :].cpu().to(torch.bfloat16).clone()
+                break
 
         record = {
             "seed_id": conv.seed_id,
@@ -100,6 +114,8 @@ def extract_for_conversation(
             "n_user_tokens_in_turn": slc.stop - slc.start,
             "last_token_act": last_token_act,  # [n_layers+1, hidden]
         }
+        if assistant_start_token_act is not None:
+            record["assistant_start_token_act"] = assistant_start_token_act  # [n_layers+1, hidden]
         if dense_layers:
             dense = hidden_states[dense_layers, slc, :].cpu().to(torch.bfloat16).clone()
             # shape: [len(dense_layers), n_tokens_in_turn, hidden]

@@ -4,7 +4,14 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
-from peft import PeftModel, LoraConfig, get_peft_model
+try:
+    from peft import PeftModel, LoraConfig, get_peft_model
+    _PEFT_AVAILABLE = True
+except ImportError:
+    PeftModel = type(None)  # type: ignore
+    LoraConfig = None  # type: ignore
+    get_peft_model = None  # type: ignore
+    _PEFT_AVAILABLE = False
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, PreTrainedModel
 
 

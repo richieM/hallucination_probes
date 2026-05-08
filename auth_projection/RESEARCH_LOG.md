@@ -4,6 +4,146 @@ Living document. Most recent entries at top. Each entry captures a decision, the
 
 ---
 
+## 2026-05-08 — v3b/v3c: probe-position win + clean monotonic steering on real conversations
+
+Two consecutive RunPod sessions (v3b first, v3c retry after a peft-import bug). Headline: two genuinely strong results, both at Llama 3.1 8B layer 14.
+
+### Probe position matters: assistant-start-token >> last-user-token
+
+Following Shivam's mentor-meeting suggestion to read activations at the chat-template assistant-start token (the position right before the model begins generating its response) rather than at the last user-token, I re-extracted Llama 8B activations saving both positions, then trained probes at each.
+
+**The new probe position dominates on every metric we measure:**
+
+| metric (Llama 8B, L14) | last_user_token | **assistant_start_token** | Δ |
+|---|---|---|---|
+| Standard test accuracy | 0.801 | **0.841** | **+4.0 pp** |
+| AUC strongly-vs-rest | 0.989 | **0.996** | +0.7 pp |
+| Counterfactual paraphrase gap | 0.013 | **−0.001** | essentially zero — paraphrase-invariant |
+| Minimal-edit flip rate | 40.4% | **47.2%** | +6.8 pp |
+| **submission_voice acc** (deferential vocab without behavior) | 0.600 | **0.733** | **+13.3 pp** |
+| **peer_voice acc** (deference behavior without submission vocab) | 0.846 | **0.920** | +7.4 pp |
+| Combined-twin probe acc | 0.756 | **0.850** | +9.4 pp |
+| Combined-twin AUC strongly | 0.996 | **1.000** | perfect ranking |
+
+The single biggest practical implication: **the "submission_voice still bad" caveat we'd been carrying for two sessions essentially closes.** At the new probe position, the probe is competitive with TF-IDF on submission_voice (0.733 vs 0.733) and dominates on peer_voice (0.920 vs 0.692). Combined twins are now a 9.4 pp probe win over TF-IDF (vs a tie at the old position) and AUC strongly is perfect.
+
+The CF gap dropping from 0.013 to −0.001 (paraphrase test scores essentially the same as standard) is also striking — at the new position the probe is **paraphrase-invariant**, the cleanest possible test for "signal isn't tied to specific phrasings."
+
+The cosine similarity between the two steering vectors (`v_last_user_token` vs `v_assistant_start_token`) is only 0.41 — they're meaningfully different directions in the residual space. The assistant-start vector also has smaller norm (2.17 vs 3.72), consistent with "the relevant direction is sharper / lower-rank at the position right before generation begins."
+
+### B4: clean monotonic steering on real conversations
+
+We finally ran the cleanly-designed steering experiment: take 39 held-out test conversations, cut the prefix through the *last* user turn, generate the assistant response with `α·v` injected at every token *during generation*, locked sampling seed across alphas. Vector source: assistant_start_token activations. Sweep α ∈ {−4, −2, −1, 0, +1, +2, +4}.
+
+For each of 273 generations (39 convs × 7 α), Sonnet rated the response on:
+- **directiveness** (0–10): how much the assistant tells the user what to do vs enumerates options
+- **hedging** (0–10): how much the assistant softens claims
+- **compliance** (0–10): how much the assistant cedes its judgment back to the user
+
+Plus mechanical metrics (length, hedge-words, directive-words).
+
+**Aggregate result, mean across 39 convs at each α:**
+
+| α | mean len chars | directiveness | hedging | compliance |
+|---|---|---|---|---|
+| **−4** | 1761 | **1.28** | **7.10** | 4.00 |
+| −2 | 1431 | 3.46 | 5.46 | 4.41 |
+| −1 | 1215 | 4.54 | 4.77 | 3.92 |
+| **0** (baseline) | 1105 | 5.13 | 4.38 | 3.62 |
+| +1 | 908 | 6.00 | 3.41 | 3.10 |
+| +2 | 839 | **6.23** | **2.85** | **2.64** |
+| +4 (off-manifold) | 993 | 1.36 | 3.13 | 2.46 |
+
+Across α ∈ [−4, +2] (the in-distribution range — 80% of residual norm at the endpoints, expected to stay coherent):
+- **Directiveness rises monotonically 1.28 → 6.23** (~5× shift). At α=−4 the assistant gives pure-enumeration responses with no recommendation; at α=+2 it takes a clear stand.
+- **Hedging falls monotonically 7.10 → 2.85** (60% drop).
+- **Compliance falls 4.00 → 2.64** (slight bump at α=−2 then strict monotone).
+- **Length falls 1761 → 839 chars** (50% drop). The terser-when-user-deferring effect we'd seen weakly in behavior coupling shows up cleanly in steering.
+
+At α=+4 (160% of residual norm), the response degenerates as predicted; the Sonnet-rated directiveness collapses back to 1.36 because the text becomes incoherent.
+
+This is the cleanest steering result the project has produced. Vastly better than the muddled roleplay-prompt experiment from a few days ago. Here we have:
+- Real conversations (not synthetic roleplay prompts)
+- Real assistant generation slot (not "model pretends to be user")
+- Same baseline at α=0 by construction (locked seed)
+- Strong monotone effect across 4 different metrics
+- Effect saturates exactly where the residual-norm math predicted breakdown
+
+The steering effect on **length** mirrors the behavior-coupling effect we found earlier: when the user is "more deferential" (higher α steering, or more deferential natural text), the assistant gives a shorter response. The two converge on the same finding from different angles.
+
+Side-by-side HTML viewer with all 273 generations is published to GitHub Pages at `docs/v3c_steering_viewer.html` for qualitative scrolling.
+
+### B2: hand-built testbed
+
+15 hand-written test conversations across the tier × twin-style grid, including borderline cases. Run through both probes:
+
+| | overall | peer_voice (n=4) | submission_voice (n=4) | match (n=7) |
+|---|---|---|---|---|
+| last_user_token probe | **12/15 (80%)** | 4/4 (100%) | 3/4 (75%) | 5/7 (71%) |
+| assistant_start_token probe | 11/15 (73%) | 4/4 (100%) | 2/4 (50%) | 5/7 (71%) |
+
+Both probes get peer_voice perfectly. On the small hand-built set, last_user_token actually edges assistant_start by one prediction (small-n noise; opposite ranking from the synthetic test). The 80% overall on hand-built convs is reasonable validation that the probe behaves sensibly on conversations from outside the synthetic-data distribution.
+
+### C2: expanded minimal-edit behavior coupling at 8B
+
+The expanded labeled set (67 minimal-edit children, +72% over the original 39) yielded 136 flip-points. Llama 8B paired generation + Sonnet judge.
+
+| metric (less-deferential side) | original (n=73) | **expanded (n=136)** |
+|---|---|---|
+| length_chars Δ | +123 (p=0.006) | **+108 (p=0.001)** |
+| length_words Δ | +22 (p=0.0001) | **+19 (p=0.0001)** |
+| hedges Δ | +0.95 (p=0.061) | +0.62 (p=0.079) |
+| directives Δ | n.s. | −0.15 (p=0.061) ✓ now directional |
+
+The behavior-coupling effect holds with more data and the p-values tighten. The "+1" (more-deferential side) directional trends are still mostly null on individual mechanical metrics but are consistently in the predicted direction (length_words Δ = −10.9 in expanded vs +6.6 in original).
+
+### What now changes about the framing
+
+Three concurrent updates:
+
+1. **The probe IS reading internal user-state, more than we'd previously claimed.** With submission_voice fixed by position choice, the "probe is partially fooled by polite words" caveat largely closes. At L14 with assistant-start-token, the probe ties or beats TF-IDF on every twin slice.
+
+2. **Steering is causally meaningful, not just an artifact of LM-head bias.** The clean monotone effect on real conversations at moderate α — with locked seed across alphas, baseline at α=0, and a predicted breakdown threshold — is much harder to explain away than the previous roleplay-prompt result. This is the version of full-position steering that should headline any writeup.
+
+3. **The behavior-coupling result was not noise.** Doubling the eval set tightens the effect, doesn't dissolve it.
+
+Together: three independent observers (probe accuracy, real-conversation steering, behavior coupling at scale) all show that user authority-projection is something Llama 3.1 8B both *represents internally* and *uses to drive its responses*.
+
+### Caveats holding
+
+- 8B is one model — Qwen 7B replication still pending
+- Effect sizes are interpretable, not overwhelming
+- Cosine sim 0.41 between the two steering vectors means the right vector to use is genuinely an open question; we don't have ablations across vector sources
+- The ~15-pp peer_voice probe lead is on n=26 — small absolute count, even if the signal is sharp
+
+### Methodology improvements baked in this iteration
+
+- `extract_activations.py` saves both `last_token_act` and `assistant_start_token_act` per turn
+- `train_probe.split_by_seed` enforces an explicit train/test no-overlap assertion
+- `eval_counterfactuals.main` enforces "CF parents must come from test split, not train"
+- `model_utils.py` makes the `peft` import optional (fixed the v3b crash)
+- `steer_real_conversations.py` accepts `--vector_source` flag
+- Pipeline orchestration uses `|| true` per step so one failure doesn't abort the rest
+
+### Files added/modified this iteration
+
+- `auth_projection/steer_real_conversations.py` — B4
+- `auth_projection/score_steering_responses.py` — Sonnet directiveness/hedging/compliance scorer
+- `auth_projection/build_steering_html.py` — side-by-side HTML viewer
+- `auth_projection/train_probe_alt_position.py` — assistant-start-token probe
+- `auth_projection/run_handbuilt_testbed.py` — B2
+- `auth_projection/extract_activations.py` — saves both positions
+- `utils/model_utils.py` — optional peft import
+- `docs/v3c_steering_viewer.html` — published HTML viewer (273 generations, side-by-side)
+
+### Cost
+
+v3b: ~$3.50 (terminated at watcher deadline before B4 ran due to bug)
+v3c: ~$2 GPU + ~$5 Sonnet API
+Total: **~$10.50** for the whole iteration, ending with the cleanest steering result and the corrected probe position.
+
+---
+
 ## 2026-05-06 (night) — v3 (Llama 3.1 8B): scale-emergent representation + behavior coupling
 
 Big run, big result. Llama 3.1 8B Instruct on a fresh RunPod A100 80GB (with 100GB volume + 60GB container disk to actually fit the model). Same pipeline as v1/v2 but on a meaningfully larger model from a different family.
