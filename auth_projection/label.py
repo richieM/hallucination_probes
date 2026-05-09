@@ -58,6 +58,8 @@ class LabelConfig(ExperimentConfigBase):
             self.input_path = Path(self.input_path)
         if isinstance(self.output_path, str):
             self.output_path = Path(self.output_path)
+        if isinstance(self.safetytooling_cache_dir, str):
+            self.safetytooling_cache_dir = Path(self.safetytooling_cache_dir)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
 

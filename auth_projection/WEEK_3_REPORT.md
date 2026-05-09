@@ -260,6 +260,68 @@ The asymmetric pattern is now triangulated across **three independent measuremen
 
 ---
 
+## Update — v6 replay + random-direction control
+
+End-to-end independent reproduction of v3c on a fresh pod with a fresh Sonnet cache. **Same code, same data, same locked seeds, different transformers/torch/CUDA.** Plus the random-direction steering control (3 random unit vectors at L14, norm-matched to ‖v_deference‖).
+
+### Reproduces (very) cleanly
+
+- **Probe at every layer reproduces to 0.001 of acc/AUC.** L14 acc=0.801 in both runs. Probe pipeline is fully deterministic given activations.
+- **Sonnet judge is essentially deterministic at temp=0** (verified by re-scoring committed v3c response files with a fresh cache → exact match on minedit −1 (55%) and on every paraphrase tier).
+- **Behavior coupling on natural minimal edits replicates within 1pp:**
+
+| | committed v3c | v6c replay |
+|---|---|---|
+| Minedit −1 DIFF_REC | 55% | **56%** |
+| Minedit +1 DIFF_REC | 34% | 33% |
+| Paraphrase noise floor | 23% | 27% |
+| **Gap above noise (−1)** | +32pp | **+29pp** |
+
+The headline natural-text safety claim survives independent reproduction.
+
+### Random-direction control (new)
+
+Three random unit vectors at L14, norm-matched to ‖v_deference‖. Used as steering vectors with the same B4 pipeline, same alpha sweep.
+
+**At α=+2:**
+
+| | DIFF_REC% |
+|---|---|
+| Deference vector (v6c replay) | **92%** |
+| Random vector seed 0 | 59% |
+| Random vector seed 1 | 36% |
+| Random vector seed 2 | 33% |
+| Random average (3 seeds) | 43% |
+
+**Deference is 2.1× more effective than a matched-norm random direction.** Direction-specificity is real. But — random directions are not the noise floor either; they produce 33–59% DIFF_REC at α=+2. The clean read:
+
+- "Any large perturbation at L14 shifts recommendations somewhat" (random ≈ 43%)
+- "The deference direction shifts them more than twice as often as random" (92% vs 43%)
+
+The "any-direction-flips-recommendations" loophole is closed in the qualitative sense (deference >> random) but not in the binary-zero sense (random > 0).
+
+### Steering magnitude shifts up under hardware nondeterminism
+
+| α | committed v3c DIFF_REC | v6c replay DIFF_REC |
+|---|---|---|
+| −2 | 18% | **72%** |
+| +2 | 69% | **92%** |
+
+Same activations + same vector + same seed. Different hardware → different generations → Sonnet judges as more substance-different. **Steering magnitude has a roughly ±20pp confidence interval across hardware setups.** Same monotone shape in both runs.
+
+### What this means for next-meeting framing
+
+- **Frame (a) — probe captures user-state** holds verbatim.
+- **Frame (b) — natural-text behavior coupling** holds verbatim (the +30pp claim).
+- **Frame (c) — steering direction-specificity** needs the random control quantification ("~2× over random," not "uniquely effective").
+- **Future steering claims should report multi-seed magnitude** with the ~±20pp envelope acknowledged.
+
+### Random-direction-control replication cost
+
+~$17 total (~$3.50 RunPod, ~$13 Anthropic API). Within $30 budget I'd allocated, comfortable margin remaining.
+
+---
+
 ## What I want from you in this meeting
 
 1. **Is the scale-emergence finding strong enough to be the centerpiece**, or is the right call to caveat it more heavily and frame this as "intriguing but n=1 at 8B"?

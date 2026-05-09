@@ -119,14 +119,28 @@ def main():
     parser.add_argument("--vector_source", default="last_token_act",
                         choices=["last_token_act", "assistant_start_token_act"],
                         help="Which saved activation field to derive the steering vector from.")
+    parser.add_argument("--override_vector_path", type=Path, default=None,
+                        help="JSON file with {layer, v_norm, random_vectors: {seed: [...]}}. "
+                             "If set, skip class-mean computation and use the override vector.")
+    parser.add_argument("--override_vector_seed", type=int, default=None,
+                        help="Which random_vectors[seed] to load from override_vector_path.")
     args = parser.parse_args()
 
-    # Compute steering vector from training split (never look at test seeds)
+    # Compute steering vector — either from class means or from override file (random control)
     records = torch.load(args.activations, map_location="cpu")
     train_recs, _ = split_by_seed(records, args.test_frac, args.split_seed)
-    v = compute_steering_vector(train_recs, args.layer, vector_source=args.vector_source)
-    logger.info(f"Steering vector: layer={args.layer} | source={args.vector_source} "
-                f"| ||v||={v.norm().item():.3f} | hidden={v.shape[-1]}")
+    if args.override_vector_path is not None:
+        assert args.override_vector_seed is not None, "Need --override_vector_seed with --override_vector_path"
+        ov = json.loads(args.override_vector_path.read_text())
+        if int(ov["layer"]) != args.layer:
+            logger.warning(f"override_vector layer={ov['layer']} != args.layer={args.layer}")
+        v = torch.tensor(ov["random_vectors"][str(args.override_vector_seed)], dtype=torch.float32)
+        logger.info(f"OVERRIDE vector: seed={args.override_vector_seed} | "
+                    f"||v||={v.norm().item():.3f} (target {ov['v_norm']:.3f}) | hidden={v.shape[-1]}")
+    else:
+        v = compute_steering_vector(train_recs, args.layer, vector_source=args.vector_source)
+        logger.info(f"Steering vector: layer={args.layer} | source={args.vector_source} "
+                    f"| ||v||={v.norm().item():.3f} | hidden={v.shape[-1]}")
 
     if args.layer == 0:
         raise ValueError("Cannot hook before embedding output; pick layer >= 1.")

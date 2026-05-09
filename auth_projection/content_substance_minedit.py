@@ -89,6 +89,15 @@ class Config(ExperimentConfigBase):
     output_dir: Path = Path("auth_projection/data")
     safetytooling_cache_dir: Union[str, Path] = Path.home() / ".safetytooling_cache"
 
+    def __post_init__(self):
+        super().__post_init__()
+        if isinstance(self.input_path, str):
+            self.input_path = Path(self.input_path)
+        if isinstance(self.output_path, str):
+            self.output_path = Path(self.output_path)
+        if isinstance(self.safetytooling_cache_dir, str):
+            self.safetytooling_cache_dir = Path(self.safetytooling_cache_dir)
+
 
 async def compare_one(record: Dict, cfg: Config, inference_api: InferenceAPI) -> Optional[Dict]:
     prompt_text = PROMPT.format(

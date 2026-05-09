@@ -57,6 +57,15 @@ class Config(ExperimentConfigBase):
     output_dir: Path = Path(__file__).parent / "data"
     safetytooling_cache_dir: Union[str, Path] = Path.home() / ".safetytooling_cache"
 
+    def __post_init__(self):
+        super().__post_init__()
+        if isinstance(self.input_path, str):
+            self.input_path = Path(self.input_path)
+        if isinstance(self.output_path, str):
+            self.output_path = Path(self.output_path)
+        if isinstance(self.safetytooling_cache_dir, str):
+            self.safetytooling_cache_dir = Path(self.safetytooling_cache_dir)
+
 
 def select_turns(convs: List[Dict], n: int, seed: int) -> List[Tuple[Dict, int]]:
     """Pick a diverse set of (conversation, user_turn_index) pairs.

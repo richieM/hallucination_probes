@@ -95,6 +95,15 @@ class Config(ExperimentConfigBase):
     output_dir: Path = Path("auth_projection/data")
     safetytooling_cache_dir: Union[str, Path] = Path.home() / ".safetytooling_cache"
 
+    def __post_init__(self):
+        super().__post_init__()
+        if isinstance(self.input_path, str):
+            self.input_path = Path(self.input_path)
+        if isinstance(self.output_path, str):
+            self.output_path = Path(self.output_path)
+        if isinstance(self.safetytooling_cache_dir, str):
+            self.safetytooling_cache_dir = Path(self.safetytooling_cache_dir)
+
 
 def render_prefix(seed_id: str, last_user_text: str, full_records_by_seed: Dict, convs_by_seed: Dict) -> str:
     """Build a readable conversation prefix for the scorer prompt."""

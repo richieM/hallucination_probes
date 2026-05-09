@@ -66,9 +66,12 @@ class JudgeConfig(ExperimentConfigBase):
     log_to_file: bool = False
 
     def __post_init__(self):
+        super().__post_init__()
         self.input_path = Path(self.input_path)
         self.output_path = Path(self.output_path)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(self.safetytooling_cache_dir, str):
+            self.safetytooling_cache_dir = Path(self.safetytooling_cache_dir)
 
 
 def render_prefix(prefix: List[Dict]) -> str:

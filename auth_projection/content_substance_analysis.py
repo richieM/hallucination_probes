@@ -94,6 +94,17 @@ class Config(ExperimentConfigBase):
     coherent_alphas: str = "-2,-1,0,1,2"  # comma-sep; 0 must be in this set (it's the baseline)
     safetytooling_cache_dir: Union[str, Path] = Path.home() / ".safetytooling_cache"
 
+    def __post_init__(self):
+        super().__post_init__()
+        if isinstance(self.steering_path, str):
+            self.steering_path = Path(self.steering_path)
+        if isinstance(self.convs_path, str):
+            self.convs_path = Path(self.convs_path)
+        if isinstance(self.output_path, str):
+            self.output_path = Path(self.output_path)
+        if isinstance(self.safetytooling_cache_dir, str):
+            self.safetytooling_cache_dir = Path(self.safetytooling_cache_dir)
+
 
 def render_prefix(seed_id: str, last_user_text: str, convs_by_seed: Dict) -> str:
     conv = convs_by_seed.get(seed_id)
