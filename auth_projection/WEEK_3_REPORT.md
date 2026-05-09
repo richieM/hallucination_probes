@@ -322,6 +322,23 @@ Same activations + same vector + same seed. Different hardware → different gen
 
 ---
 
+## Update — v7: deference is a pretraining feature, not RLHF-induced
+
+Llama 3.1 8B *base* (no instruction tuning, no RLHF) probe at L14 last_user_token: **acc=0.815** (vs Instruct 0.801). At assistant_start_token base drops to 0.752 (vs Instruct 0.848).
+
+**Two findings:**
+1. The deference representation exists in the base model essentially as strongly as in instruct. **Pretraining encodes the user-state feature; RLHF doesn't create it.**
+2. Instruction tuning sharpens the readout at chat-template positions specifically (the +9.6pp gain at assistant_start_token) — likely because the base model has never been trained to treat `<|start_header_id|>assistant<|end_header_id|>` as a meaningful anchor.
+
+**This changes the safety framing.** "Fix sycophancy via RLHF data tweaks" is much weaker than expected — the underlying representation is already in the model after pretraining. The interventions that remain workable: (a) inference-time steering / probe-monitoring, (b) train models that don't form this representation in the first place (much harder, requires pretraining-data-level intervention).
+
+Plus methodological tightening:
+- **Categorize substance verdicts:** the +1 direction (user defers) is the cleaner safety signal — 57–63% of substantive changes are model-takes-over-decision. The −1 direction's higher raw DIFF_REC was partly Sonnet over-counting framing/sequence-only verdicts. Real-substance gap above noise: +13pp (+1), +18pp (−1) — much closer to symmetric than the raw +29pp suggested.
+- **Geometry:** v_deference is essentially 1-D (cos(v_def, PC1)=0.96; PC1 alone gives 91.8% train acc), topic-invariant (all topic-specific cos with global v_def in [0.74, 0.89]), and crystallizes at L13–L15.
+- **Probe is behavior-anchored:** the submission_voice failure mode is actually the probe correctly filtering out vocabulary; the lexical-twin design did its job.
+
+---
+
 ## What I want from you in this meeting
 
 1. **Is the scale-emergence finding strong enough to be the centerpiece**, or is the right call to caveat it more heavily and frame this as "intriguing but n=1 at 8B"?

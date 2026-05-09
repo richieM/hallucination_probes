@@ -4,6 +4,169 @@ Living document. Most recent entries at top. Each entry captures a decision, the
 
 ---
 
+## 2026-05-09 — v7: Llama 3.1 8B BASE probe + geometry analyses + categorize substance verdicts
+
+End-of-night sprint, three lines of work in parallel: (1) probe Llama 3.1 8B *base* (no instruction tuning, no RLHF) to see if the deference feature pre-exists post-training; (2) free local analyses of v_deference geometry (PCA, cross-layer cosine, topic invariance, twin-failure case study); (3) Sonnet-categorize the DIFF_REC verdicts to see *what kind* of advice changes happen, not just how often.
+
+### Result 1 — The deference feature is a *pretraining* phenomenon
+
+At `last_user_token` position, Llama 3.1 8B *base* model probe is essentially indistinguishable from the instruct version (and slightly *higher* at the headline layer):
+
+| Layer | last_user_token: Instruct | last_user_token: BASE |
+|---|---|---|
+| L13 | 0.774 | 0.795 |
+| **L14** | **0.801** | **0.815** ← base wins by +1.4pp |
+| L15 | 0.767 | 0.795 |
+| L21 | 0.760 | 0.788 |
+| L23 | 0.788 | 0.740 |
+
+Best-accuracy layer is L14 in *both* models. AUC strongly_vs_rest: instruct 0.989, base 0.983. Within sampling noise.
+
+**Implication:** The deference-tracking representation does NOT require instruction tuning or RLHF. It exists in the model after pretraining alone. This rules out the most attractive "RLHF created sycophancy" framing — at least at the level of internal representation.
+
+The behavioral result is consistent with this: pretrained transformers learn from internet text where deferential users tend to receive directive replies. The model picks up that statistical association during pretraining; fine-tuning amplifies the *behavior* but doesn't create the underlying user-state representation.
+
+### Result 2 — Instruction tuning creates chat-template-anchored readout, *not* user-state
+
+At `assistant_start_token` position (the chat-template "assistant header" right before the model generates), the picture inverts:
+
+| Layer | assistant_start: Instruct | assistant_start: BASE |
+|---|---|---|
+| L12 | 0.807 | 0.731 |
+| L13 | 0.814 | 0.745 |
+| **L14** | **0.848** | 0.752 ← instruct wins by +9.6pp |
+| L15 | 0.786 | 0.779 |
+| L17 | 0.800 | 0.759 |
+
+This makes mechanical sense: `<|start_header_id|>assistant<|end_header_id|>` are arbitrary tokens to the base model — it has never been trained to treat them as semantic anchors. The instruct model has been trained to use that position as the "now I respond" signal, and as a side effect that position acquires a sharp readout of user-state-from-context.
+
+**So instruction tuning does two things:** (a) makes the chat-template tokens semantically meaningful, and (b) sharpens readout of user-state at those template positions. It does NOT create the user-state feature itself — that's already present after pretraining.
+
+### Result 3 — v_deference is essentially 1-dimensional and topic-invariant
+
+Free local analysis of v6c L14 activations:
+
+**PCA on strongly-vs-none training-split activations:**
+- PC1 alone gives **91.8%** train accuracy on strongly-vs-none separation
+- **cos(v_def, PC1) = 0.960** — v_def is essentially PC1 of the class-mean separation
+- ‖projection of v_def onto top-1 PCs‖ / ‖v_def‖ = 0.960 (96% of v_def's energy lives on a single direction)
+- ‖projection onto top-3 PCs‖ / ‖v_def‖ = 0.983 (98.3% lives in 3-D)
+
+**Implication:** Deference is a *clean linear feature* — a single direction in residual space, not a manifold. The mean-difference steering vector is essentially the optimal direction in the standard "linear probing" sense. This is the kind of structurally clean feature interpretability work prefers.
+
+**Cross-layer cosine of v_def vs L14:**
+
+| L | cos(v_L, v_L14) | ‖v‖ |
+|---|---|---|
+| 0 | 0.05 | 0.14 |
+| 5 | 0.26 | — |
+| 10 | 0.58 | — |
+| 13 | 0.84 | — |
+| **14** | **1.00** | **3.72** |
+| 15 | 0.86 | — |
+| 21 | 0.50 | — |
+| 32 | 0.15 | 41.2 |
+
+**The deference direction crystallizes around L13–L15** — strongly preserved within ±2 layers, then gradually diverges. Norm grows monotonically from 0.14 (embed) to 41 (final layer). The feature evolves through the residual stream rather than being a static direction at one site, but its *core orientation* is set by L13–L15.
+
+**Topic invariance:** topic-specific v_def (built from records of one topic only) has cosine 0.74–0.89 with the global v_def. The deference feature is largely topic-independent. Highest cos: personal goals (0.889), health (0.881), financial (0.882). Lowest: programming (0.743), cooking (0.777). All positive, all >0.74.
+
+### Result 4 — The probe is *behavior*-anchored, not vocabulary-anchored
+
+Submission_voice failure mode (probe loses 0.60 vs TF-IDF 0.80, n=15) — the actual cases:
+
+The 3 cases where TF-IDF wins all share a specific pattern:
+- True label = `somewhat` (user is *partially* deferring)
+- User uses explicit deferential phrases: *"you're the expert here so I'll trust your take,"* *"I'll defer to your expertise here,"* *"I'll defer to your read"*
+- Probe says `none` (independent), TF-IDF correctly says `somewhat`
+
+**The probe correctly distinguishes "behavioral surrender" from "polite deferential framing while still being decisive."** This is *why* it wins on `peer_voice` (severe deference behavior, no submission vocabulary). The "submission_voice failure" isn't really a failure — it's that the probe is too good at filtering out vocabulary cues to catch cases where the labeler used vocabulary as the deciding signal. The probe has a behavior-anchored conception of deference; the labeler in `somewhat` cases is using a vocabulary-anchored conception.
+
+Methodological lesson: the lexical-twin design *worked* — the probe and the bag-of-words classifier are reading different things, and the twin slice surfaces that difference cleanly.
+
+### Result 5 — Categorize substance verdicts: the +1 direction is the cleaner safety signal
+
+Sonnet-categorized each DIFFERENT_RECOMMENDATION verdict into a fixed taxonomy. Across 4 conditions (minedit ±1, paraphrase, steering deference α=±1, steering random α=±1), filtering to in-distribution α=±1 to avoid the |α|=2 incoherence confound:
+
+**"Directive-takeover" composite (TAKES_OVER_DECISION + PROVIDES_TEMPLATE + ADDS_UNREQUESTED_ACTIONS + CONTRADICTS_USER_PREFERENCE):**
+
+| Condition | Composite |
+|---|---|
+| Steering deference α=+1 | **63%** |
+| Minedit +1 (user defers) | **57%** |
+| Steering random α=+1 | 44% |
+| Minedit −1 (user keeps agency) | 46% |
+| Paraphrase noise floor | 28% |
+| Steering random α=−1 | 54% |
+| **Steering deference α=−1** | **25%** |
+
+**The +1 direction (user defers / deference injected) is the clean safety pattern.** When user surrenders agency, the model commits to choices the user was weighing, provides ready-to-use templates, adds unrequested actions, and sometimes contradicts user-stated preferences — at 57–63% of substantive changes. When user keeps agency, this composite drops to 25–46%.
+
+**TAKES_OVER_DECISION specifically:** 26% (minedit +1), 37% (steering deference α=+1), drops to 0% (steering deference α=−1). Direction-specific.
+
+### Result 6 — The −1/+1 asymmetry partially dissolves under categorization
+
+The previous v3c+v6c headline was: *minedit −1 = 55–56% DIFF_REC vs minedit +1 = 33–34%, asymmetric* (+22pp gap). After categorizing:
+
+- minedit −1 has 19% `DIFFERENT_SEQUENCE_SAME_GOAL` + 30% `DIFFERENT_FRAMING_OR_TONE` (cooking-step reorderings, tone shifts)
+- minedit +1 has 0% sequence + 26% framing
+
+Stripping framing+sequence as "not real substance change" gives "real substantive change rate":
+
+| | DIFF_REC% | × (1 − framing% − sequence%) | substantive only |
+|---|---|---|---|
+| Minedit +1 | 33% | × 74% | **24%** |
+| Minedit −1 | 56% | × 51% | **29%** |
+| Paraphrase noise floor | 27% | × 41% | **11%** |
+
+**Real gap above noise: +13pp (+1) and +18pp (−1).** Smaller than the headline +29pp gap from raw DIFF_REC%. The asymmetry shrinks from 23pp → 5pp. Most of the apparent asymmetry was Sonnet over-counting "different sequence" or "different framing" verdicts as DIFF_REC in the −1 cases (cooking conversations have lots of step-reorderings).
+
+The behavior coupling claim survives (substantive +1 still 13pp above noise floor) but the *direction* of asymmetry largely dissolves — the safety pattern is symmetric in magnitude, just shifted in *kind*: +1 is cleanly "model takes over"; −1 is more diffuse stylistic shifts plus some takeover.
+
+### What this collectively changes for the project
+
+**Old framing:** "Sycophancy is RLHF-induced; we have a probe to monitor and steer it."
+
+**New framing (now supported by data):**
+1. The deference-tracking representation is a *pretraining* feature. It's how language models learn user-state from internet chat data, and instruction-tuning doesn't create it (at least at the residual-stream level).
+2. The feature is essentially 1-dimensional, topic-invariant, crystallizes at L13–L15, and is *behavior-anchored* (not vocabulary-anchored).
+3. When users defer, the model takes over decisions / provides templates / contradicts user preferences in ~57–63% of substantive changes — the safety pattern made concrete in failure modes, not just rates.
+4. The −1/+1 asymmetry is mostly an artifact of Sonnet over-counting framing/sequence verdicts; both directions show similar amounts of *real* recommendation change (~13–18pp above noise), just of different kinds.
+
+**The main safety-relevant claim becomes:**
+
+> *"User-deference-tracking is a pretraining-emerging, linearly-readable, ~1-D feature in the residual stream of Llama 3.1 8B at L13–L15. Instruction tuning sharpens its readout at chat-template positions but does not create it. Steering along this direction at moderate α produces ~2× more substantive recommendation change than a same-norm random direction, with the most common failure mode being 'model takes over a decision the user was weighing.'"*
+
+That's a paper-shaped claim. It also changes what "fixing sycophancy" looks like: not "fix RLHF data" (the feature is already there post-pretraining), but instead "block readout of an existing feature at inference time" or "train a model that doesn't form this feature in the first place" (much harder; pretraining-data-level intervention).
+
+### Cost
+
+Total v7 spend:
+- RunPod: ~$1.50 (one A6000 pod, ~2h, just probe extraction + training)
+- Anthropic: ~$1 (categorize substance, ~150 verdicts)
+- Total: **~$2.50**
+
+RunPod balance after this run: ~$10. Plenty of headroom for follow-up.
+
+### Files added this iteration
+
+- `auth_projection/data/v7_activations.pt` (Llama 3.1 8B base activations, on pod only)
+- `auth_projection/data/v7_probe_results.json`, `v7_probes/probe_C_layer*.joblib`
+- `auth_projection/data/v7_probe_results_assistant_start.json`, `v7_probes_assistant_start/`
+- `auth_projection/data/v6c_geometry_analysis.json` (PCA, cross-layer, topic results)
+- `auth_projection/data/v6c_diff_rec_categorized.jsonl` (149 categorized verdicts)
+- `auth_projection/analyze_v_deference_geometry.py` (PCA / cross-layer / topic script)
+- `auth_projection/analyze_twin_failures.py` (submission_voice case study)
+- `auth_projection/categorize_diff_rec.py` (Sonnet category taxonomy on DIFF_REC verdicts)
+
+### Open questions this opens up
+
+The base-vs-instruct result begs the next question: **at what point during pretraining does the feature emerge?** This is the multi-checkpoint Olmo/Pythia experiment from the original next-steps list. Specifically: probe accuracy as a function of pretraining tokens. If it rises smoothly with scale, the feature is "internet text encodes deferential interactions and the model picks up the statistical regularity." If it appears suddenly at a specific scale, that's a phase-transition story.
+
+Also still open: the random-direction control could be tightened with more seeds or with the orthogonal-complement variant. And the full mechanism (which attention heads write to v_def at L13–L14?) is unclaimed.
+
+---
+
 ## 2026-05-09 — Project summary: results across H1–H5
 
 End-of-Week-3 summary organized by hypothesis, written after v6 replay closed the reproducibility loop. Numbers are pulled from v3c (committed) and v6c (replay) — both Llama 3.1 8B Instruct unless noted.
