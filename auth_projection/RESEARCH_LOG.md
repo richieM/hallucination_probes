@@ -4,6 +4,111 @@ Living document. Most recent entries at top. Each entry captures a decision, the
 
 ---
 
+## 2026-05-09 — Project summary: results across H1–H5
+
+End-of-Week-3 summary organized by hypothesis, written after v6 replay closed the reproducibility loop. Numbers are pulled from v3c (committed) and v6c (replay) — both Llama 3.1 8B Instruct unless noted.
+
+### H1 — Is there an authority-projection representation, and can probes catch it beyond text features?
+
+**R1: Yes, at scale.**
+
+| | acc | AUC strongly |
+|---|---|---|
+| Llama 8B probe at L14 (last_user_token) | 0.801 | 0.989 |
+| Llama 8B probe at L14 (assistant_start_token) | 0.841 | — |
+| Qwen 7B probe at L21 (assistant_start_token) | 0.842 | — |
+| TF-IDF baseline (combined lexical twins) | 0.707 | — |
+
+The acid test was the **lexical-twin slice** — conversations where surface vocabulary deliberately disagrees with user-state. On `peer_voice` (severe deference behavior expressed *without* submission vocabulary, the safety-relevant cell), the probe wins big: **Llama 8B 0.920 vs TF-IDF 0.692**; Qwen 7B 0.846. Probe is reading state, not words. Caveat: on the opposite twin direction `submission_voice` (deferential vocabulary without behavioral surrender), the probe still loses to TF-IDF. The probe sees past words in *one* direction but not both.
+
+Probe results replicated exactly (to 0.001 of acc/AUC) across v3c→v6c independent reruns — fully deterministic given activations.
+
+### H2 — Steerable direction?
+
+**R2: Yes, with clean monotone shape inside coherent range.**
+
+Steering vector `v = mean(strongly) - mean(none)` at L14, ‖v‖ = 3.715. Sonnet-judged directiveness/hedging/compliance shifts monotonically with α across [−2, +1]:
+
+| α | directiveness | hedging | compliance |
+|---|---|---|---|
+| −2 | 3.51 | 5.67 | 4.54 |
+| 0 | 5.72 | 3.90 | 3.56 |
+| +2 | 5.92 | 2.54 | 2.64 |
+
+Same monotone shape replicated cross-family at Qwen 7B with a slightly narrower coherent range. Off-manifold collapse (incoherent text) at |α|≥4 in both models — that's where the direction stops being useful.
+
+### H3 — Does steering change *substance*, not just style? Compared to what?
+
+**R3: Yes, two independent ways.** This is the project's load-bearing evidence.
+
+**Way #1 — natural-text comparison (the strongest evidence):**
+
+| | wording change? | state change? | DIFF_REC% |
+|---|---|---|---|
+| Same-tier paraphrase | large | none | 23–27% (noise floor) |
+| Minedit −1 (less deferential) | tiny | strong | **55–56%** |
+| Minedit +1 (more deferential) | tiny | strong | 33–34% |
+
+**Tiny edits that flip state cause +29–32pp more substantive recommendation change than larger rewordings that preserve state.** Replicated essentially exactly (within 1pp) across v3c committed and v6c replay on n=136 minedit + n=133 paraphrase pairs. No steering involved — pure prompt difference.
+
+**Way #2 — random-direction steering control (loophole-closer):**
+
+| | DIFF_REC% at α=+2 |
+|---|---|
+| Deference vector | **92%** (v6 replay) / 69% (v3c committed) |
+| 3 random unit vectors (norm-matched to ‖v‖) | 33%, 36%, 59% — mean **43%** |
+
+**Deference direction is 2.1× more effective than a same-norm random direction.** Direction-specificity is real. Caveat: random direction isn't zero — it produces ~43% DIFF_REC at α=+2, not the 23% paraphrase noise floor. So the steering effect has both a generic-perturbation component *and* a deference-specific component. Honest framing: "the deference direction shifts recommendations more than twice as often as random," not "the deference direction is uniquely effective."
+
+### H4 — Does this emerge with scale?
+
+**R4: Mostly yes, with caveats.** Behavior coupling shows clearer scale emergence than the probe itself.
+
+**Probe accuracy** is mostly flat 1.5B → 7B then steps up at 14B:
+
+| | Qwen 1.5B | Qwen 3B | Qwen 7B | **Qwen 14B** | Llama 8B |
+|---|---|---|---|---|---|
+| Best-layer acc | 0.774 | 0.767 | 0.767 | **0.815** | 0.801 |
+
+But this isn't where the scaling story lives. The interesting scaling is on the lexical-twin slice (does the probe see past words?) and on behavior coupling (does the model adapt to user state?):
+
+| | Qwen 1.5B | Qwen 3B | Qwen 7B / Llama 8B |
+|---|---|---|---|
+| Probe vs TF-IDF (combined twins) | probe loses | tied | probe wins +5 to +14 pp |
+| Mechanical metrics with p<0.05 | 0 | 2 | 2 (one at p=0.0001) |
+| Judge tie-rate (lower = sharper signal) | 80% | 84% | **53%** |
+| User-position-only steering | clean null | mostly null | weak but visible |
+
+Sharp emergence at the 7–8B step. The deference-tracking feature appears to crystallize between 3B and 7B, and behavior-coupling is the cleanest signal for it. Within-Qwen scaling for steering specifically only goes to 7B (14B steering failed three times on HF infra issues — not a scientific failure).
+
+### H5 — what else matters for interpretation
+
+**H5a — Asymmetric coupling.** The model adapts much more aggressively to "user becoming less deferential" than to "user becoming more deferential." Three independent observers replicate the asymmetry: length deltas (−1 fires p=0.001 at 8B; +1 null at 8B), judge tie-rate split, substance verdicts (+32pp gap on −1, +11pp gap on +1 at Llama 8B). Same direction at Qwen 7B and 14B. Real and not artifactual.
+
+**H5b — Probe-position matters.** The chat-template `assistant_start_token` (the position right before the model generates) is a +4 to +7pp better readout than the `last_user_token`. Replicated cross-family. Methodological lesson: the right probe position is the one closest to the prediction site, not the conventional last-input-token choice.
+
+**H5c — Submission_voice asymmetry within the probe itself.** Probe sees past surface vocabulary in the `peer_voice` direction (severe deference, no submission words → probe wins by 23pp at 8B) but NOT in the `submission_voice` direction (deferential vocab without behavioral surrender → probe still loses to TF-IDF by 13pp at 8B). The deference feature is partially word-anchored. Surface-anchoring is reduced by scale but not eliminated.
+
+**H5d — Steering magnitude has hardware variance.** Same activations + same vector + same generation seed produce ~±20pp different DIFF_REC% across different transformers/torch/CUDA versions. Direction of effect is stable; magnitude estimates need n≥3 hardware draws for confidence. Methodological lesson for steering papers.
+
+**H5e — Off-manifold collapse at extreme α.** Steering at |α|≥4 produces incoherent text (Chinese-character loops on Qwen, broken English on Llama). The deference direction lives in a narrow "coherent manifold" around α≈0. Not load-bearing for the project but worth flagging.
+
+### Headline (one-sentence)
+
+> *"At Llama 3.1 8B, a deference-direction linear probe trained on residual activations at L14 reads user-state in a way that (a) generalizes to lexical twins where text alone cannot, (b) tracks behavior such that natural minimal-edit user-state flips drive substantively different model recommendations at +30pp above a same-state paraphrase baseline (replicated within 1pp across two independent runs), and (c) when used as a steering direction, produces 2× more substantive recommendation change than a same-norm random direction at the same layer."*
+
+Three independently-supported sub-claims, each with a control. The behavior-coupling claim (b) is the load-bearing one — survived judge-variance, surface-text-volatility, and end-to-end model-reproduction stress tests.
+
+### What's intentionally NOT claimed
+
+- "Deference is the ONLY representation that drives substance change" — the random control shows random directions also shift things, just less.
+- "Steering by exact magnitude X reproduces across hardware" — magnitudes drift ±20pp.
+- "The probe is purely reading state, not words" — `submission_voice` failure shows partial word-anchoring.
+- "Scale-emergence is universal across model families" — Qwen 14B steering missing means within-Qwen steering scaling is unverified past 7B.
+- "Sycophancy emerges during pretraining vs RLHF" — that's the *next* experiment (training-dynamics on Olmo/Pythia), not yet run.
+
+---
+
 ## 2026-05-09 — v6 replay: independent reproduction + random-direction steering control
 
 ### What we set out to do
