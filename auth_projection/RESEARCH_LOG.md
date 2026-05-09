@@ -4,6 +4,181 @@ Living document. Most recent entries at top. Each entry captures a decision, the
 
 ---
 
+## 2026-05-09 — v4 Qwen scaling curve + content-substance analysis + same-tier paraphrase baseline
+
+### What we set out to do
+
+After v3c gave us clean steering + behavior coupling on Llama 8B, the obvious next-meeting question from Shivam would be "is this Llama-specific?" To answer that, ran the v3c pipeline on three more Qwen models to build a within-family scaling curve:
+
+- v4a: **Qwen 2.5 7B-Instruct** (matched-scale cross-family check vs Llama 8B)
+- v4b: **Qwen 2.5 14B-Instruct** (originally Qwen 32B; HF infra issue forced substitution)
+- (v1, v2 already done: Qwen 1.5B and 3B)
+
+Plus two ablations the v3c writeup left dangling:
+- **Content-substance analysis** — does steering / natural-text user-state difference change the *recommended action*, or just the framing? (Sonnet judge, asks SAME_ADVICE / DIFFERENT_FRAMING / DIFFERENT_RECOMMENDATION.)
+- **Same-tier paraphrase baseline** — what fraction of "different recommendation" verdicts is general model volatility vs specifically driven by user-state changes?
+
+### Setup compromises (real ones, not fudges)
+
+- Qwen 32B was the original target. Three attempts on three different RunPod boxes all failed with the same HuggingFace shard-download race (shard 1 stuck on xethub CDN with 403s, never recovered). Substituted Qwen 14B as the cleanest available step up from 7B with the same problem statement. Cost ~$4.50 in dead pod time before pivoting.
+- Qwen 14B has a related but different timing bug: 8 shards download in parallel, transformers.from_pretrained tries to load the model before all shards land, gets either "file not found" or "invalid JSON header" on partially-written shards. This bit us **three times** across recovery attempts and ate ~$15 of pod time across the day. Final state: v4b has the C2 (behavior coupling) results that ran on shorter generation jobs which avoided the timing window, but **no B4 steering**, no probe at assistant-start, no paraphrase baseline. The fix would be a separate `huggingface-cli download` step that blocks until all shards verified — didn't bake it in time.
+- v5 baseline run on Qwen 14B failed for the same reason. So the paraphrase baseline only ran on Llama 8B.
+
+### Headline numbers
+
+**Probe scaling curve** (last_user_token, since v4b doesn't have assistant_start):
+
+| model | best layer | acc | AUC strongly |
+|---|---|---|---|
+| Qwen 1.5B | L17/28 | 0.774 | 0.975 |
+| Qwen 3B | L27/36 | 0.767 | 0.980 |
+| Qwen 7B | L18/28 | 0.767 | 0.985 |
+| **Qwen 14B** | **L31/48** | **0.815** | 0.987 |
+| Llama 8B | L14/32 | 0.801 | 0.989 |
+
+Within-Qwen: probe accuracy was flat 0.767–0.774 from 1.5B through 7B, then jumps to **0.815 at 14B**. That's where the within-family scaling actually starts to do something.
+
+**Probe at assistant_start position** (Shivam's intuition replicated cross-family at matched 7-8B scale):
+
+| | last_user_token | assistant_start_token | Δ |
+|---|---|---|---|
+| Llama 8B (v3c) L14 | 0.801 | **0.841** | +4.0 pp |
+| Qwen 7B (v4a) L21 | 0.767 | **0.842** | +7.5 pp |
+
+Same +4 to +7 pp lift on assistant_start vs last_user_token at both models. The probe-position lesson holds cross-family.
+
+**Lexical-twin slice** (assistant_start_token at the chosen layer):
+
+| | combined-twin probe acc | combined-twin tfidf acc | peer_voice probe acc | submission_voice probe acc |
+|---|---|---|---|---|
+| Llama 8B v3c | 0.850 | 0.707 | **0.920** | 0.733 |
+| Qwen 7B v4a | 0.780 | 0.707 | 0.846 | 0.667 |
+
+Both models beat TF-IDF on combined twins and especially on peer_voice (severe deference behavior expressed without submission vocabulary). At Qwen 7B the lift is smaller but still positive. At Llama 8B the probe basically dominates.
+
+**B4 steering on real conversations** (Sonnet-judged, mean across 39 held-out test convs at each α):
+
+For Qwen 7B at L21:
+
+| α | directiveness 0–10 | hedging 0–10 | compliance 0–10 |
+|---|---|---|---|
+| −2 | 3.51 | 5.67 | 4.54 |
+| 0 | 5.72 | 3.90 | 3.56 |
+| +2 | 5.92 | 2.54 | **2.64** |
+
+Across α ∈ [−2, +1] (the in-distribution range): directiveness rises monotonically 3.51 → 6.10, hedging falls 5.67 → 3.44, compliance falls 4.54 → 2.64. Same monotone shape as Llama 8B, tighter usable α range (Qwen breaks at ±4, Llama tolerates α=−4 still coherent). The cross-family steering replication is essentially perfect inside the coherent range.
+
+**Behavior coupling (mechanical metrics on expanded n=136 minedit pairs at Qwen 7B):**
+
+- length_chars on +1 (more deferential): **−36, p=0.001 ***** (predicted direction)
+- length_chars on −1 (less deferential): **+48, p=0.0001 ***** (predicted direction)
+- length_words +1: −6, p=0.001 ***
+- length_words −1: +5.2, p=0.005 **
+- hedges −1: +0.38, p=0.015 **
+
+Qwen 7B is *symmetric* on mechanical metrics (both flip directions hit p<0.05) — Llama 8B was asymmetric (only −1 fired). Different shape, but both clean wins.
+
+### Content-substance analysis (the new headline experiment)
+
+For each held-out conversation, asked Sonnet to compare assistant responses pairwise and verdict whether the underlying recommendation is the same or different.
+
+**On steering pairs (vs α=0 baseline):**
+
+| α | Qwen 7B (v4a) DIFF_REC% | Llama 8B (v3c) DIFF_REC% |
+|---|---|---|
+| −4 | (off-manifold) | **74%** |
+| −2 | 33% | 18% |
+| −1 | 13% | 23% |
+| +1 | 10% | **44%** |
+| +2 | 36% | **69%** |
+
+Steering at moderate α genuinely changes the model's recommendation, not just packaging. At Llama 8B α=+2, Sonnet says **69% of responses recommend a substantively different action than baseline** — 27 of 39 conversations. At Qwen 7B the same α gives 36%. **Llama is more steerable on substance than Qwen** by ~2× at matched α.
+
+**On natural minimal-edit pairs (no steering, just label-flipped user turns):**
+
+| model | direction | DIFF_REC% |
+|---|---|---|
+| Qwen 7B v4a | +1 (more deferential) | 17% |
+| Qwen 7B v4a | −1 (less deferential) | 38% |
+| Qwen 14B v4b | +1 | 19% |
+| Qwen 14B v4b | −1 | 32% |
+| **Llama 8B v3c** | +1 | 34% |
+| **Llama 8B v3c** | −1 | **55%** |
+
+In all three models, **on natural text, the model recommends substantively different actions in roughly a third to a half of conversations when the user's deference state changes.** The asymmetric pattern (more diff-rec on the −1 "less deferential" side) replicates cleanly across all three models.
+
+### Baseline (the test for whether the substance result is real)
+
+The above numbers don't separate "user-state coupling" from "general model volatility on text changes." Built same-tier paraphrase pairs (parent + Sonnet-rewritten paraphrase with label preserved) and ran the same substance comparison. **Different surface text, same user-state label.** This is the noise floor.
+
+**Llama 8B same-tier paraphrase baseline (n=133):**
+
+| paraphrase tier | DIFF_REC% |
+|---|---|
+| none → none | 17% |
+| somewhat → somewhat | 23% |
+| strongly → strongly | 48% (n=21, small) |
+| **overall** | **23%** |
+
+Compared to the minedit (state-flipping) result on Llama 8B:
+
+| | DIFF_REC% | gap above 23% baseline |
+|---|---|---|
+| Same-tier paraphrase (no state change) | **23%** | — |
+| Minedit −1 (less deferential) | 55% | **+32 pp** ← real, sizeable |
+| Minedit +1 (more deferential) | 34% | +11 pp |
+
+The −1 effect is **32 percentage points above noise floor**. The +1 effect is +11 pp — smaller, but still positive. **The substance result is not just text volatility; it tracks user state.**
+
+The asymmetric pattern is now triangulated across three independent measurements at Llama 8B: length deltas (−1 only), judge tie-rate (17/4 vs 3/10 split), substance verdicts (+32 pp vs +11 pp gap). Three observers, same asymmetry.
+
+### What this lets us claim now
+
+With the v4 + v5 results layered on top of v3c:
+
+1. **Probe captures user-state info beyond what text features recover** — replicates at Qwen 7B + Llama 8B; assistant-start-token position is the better readout in both models (+4 to +7 pp). At Qwen 14B with last-user-token only (no assistant_start probe trained), accuracy is 0.815, the strongest within-Qwen.
+2. **Steering at moderate α causally shifts the model's recommendation, not just style** — replicates at Qwen 7B + Llama 8B; ~33–69% of responses substantively change at α=+2 depending on model.
+3. **Behavior coupling is real on natural text, validated against a noise-floor baseline** — Llama 8B minedit −1 gives 55% DIFF_REC vs 23% same-tier paraphrase baseline (+32 pp gap). Same kind of effect at Qwen 7B and Qwen 14B but smaller magnitude (and we only have the baseline for Llama 8B).
+4. **The asymmetric pattern is robust** — across length deltas, judge verdicts, substance verdicts, the model adapts more aggressively to "user becoming less deferential" than to "user becoming more deferential." Same direction in all three Qwen + Llama runs.
+
+### What we don't have / caveats
+
+- **Qwen 14B B4 steering experiment** — three retries failed on the same HF shard-download race, ate ~$15 of dead pod time, eventually ran out of budget. Within-Qwen steering scaling story stops at 7B.
+- **Same-tier paraphrase baseline only on Llama 8B** — the Qwen versions died with the 14B steering attempts. So the "23% noise floor" only validates Llama; Qwen 7B and 14B numbers are unbaselined.
+- **Random-direction steering control still not run** — would test whether the deference vector is direction-specific or whether any large perturbation flips recommendations. Holding for a future iteration.
+- **Hand-built testbed** — Qwen 7B last_user_token 80% / assistant_start 60%. Llama 8B last_user_token 80% / assistant_start 73%. Both consistent with model not memorizing single-conv-distribution; flat across twin types. Sanity check passes but isn't a strong signal either way.
+- **Content-substance Sonnet verdict reliability** — single-pass judge, no spot-check of marginal cases. Worth validating manually on ~10 random pairs before publishing.
+
+### Total spend
+
+v4 + v5 across the day: ~$36 (close to the $36 RunPod credit + ~$10 in Sonnet API).
+- Productive GPU: Llama 8B ~$2, Qwen 7B ~$2, Llama 8B baseline ~$2 = ~$6
+- Unproductive GPU (Qwen 32B failed pod, three Qwen 14B failures): ~$25
+- Sonnet (steering scoring + content substance + paraphrase substance): ~$10
+
+Most of the dead spend was on the Qwen 14B race condition. With one fix (pre-verify shards before running pipeline), the same experiment would have cost ~$5 and run cleanly.
+
+### Files added this iteration
+
+- `auth_projection/build_paraphrase_pairs.py` — same-tier baseline pair builder
+- `auth_projection/content_substance_analysis.py` — Sonnet substance verdicts on steering pairs
+- `auth_projection/content_substance_minedit.py` — Sonnet substance verdicts on natural minedit pairs
+- `auth_projection/data/v4a_*.json/jsonl` (Qwen 7B full pipeline)
+- `auth_projection/data/v4b_*.json/jsonl` (Qwen 14B partial — behavior coupling + content-substance only)
+- `auth_projection/data/v3c_paraphrase_responses.jsonl` + `v3c_paraphrase_substance.jsonl` (baseline)
+- `auth_projection/data/v3c_content_substance.jsonl`, `v4a_content_substance.jsonl` (steering substance)
+- `auth_projection/data/v3c_minedit_substance.jsonl`, `v4a_minedit_substance.jsonl`, `v4b_minedit_substance.jsonl` (natural-text substance)
+- `docs/v4a_steering_viewer.html` — Qwen 7B side-by-side viewer (will publish via Pages)
+
+### Going-forward thoughts
+
+- **For the next mentor meeting**, the load-bearing claim is "user authority-projection is a feature the model both *represents* (probe) and *uses to drive substantively different recommendations* (behavior coupling, validated against baseline)." Cross-family at matched scale (Qwen 7B + Llama 8B) is the strongest defense against "Llama-specific quirk."
+- **For the project to become paper-shaped**, the missing piece is the **random-direction steering control** — without it, the steering result has the "any-direction-flips-recommendations" loophole. That's the next ~$5 experiment to run.
+- **The Qwen 14B steering hole** is annoying but not load-bearing. The within-Qwen scaling curve covers 1.5B → 3B → 7B → (gap) → 14B for behavior coupling, with steering specifically covered at 7B and Llama 8B for the cross-family argument.
+- **The same-tier paraphrase baseline** is now part of standard methodology going forward. Any future substance claim needs it.
+
+---
+
 ## 2026-05-08 — v3b/v3c: probe-position win + clean monotonic steering on real conversations
 
 Two consecutive RunPod sessions (v3b first, v3c retry after a peft-import bug). Headline: two genuinely strong results, both at Llama 3.1 8B layer 14.
